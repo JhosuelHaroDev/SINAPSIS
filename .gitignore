@@ -2,17 +2,20 @@
 
 # Entornos virtuales
 venv/
+.venv/
 env/
 
 # Variables de entorno y secretos
 .env
 .env.*
+!.env.example
 
 # Cache de Python
 __pycache__/
 *.pyc
+*.pyo
 
-# --- AÑADIDO: Node / Frontend ---
+# Node / Frontend
 node_modules/
 frontend/node_modules/
 frontend/.next/
@@ -20,16 +23,22 @@ frontend/out/
 frontend/build/
 .vercel
 
-# --- AÑADIDO: Datos pesados del MCR (cientos de MB, NO van al repo) ---
+# Datos pesados del MCR (cientos de MB, NO van al repo)
+database/mcr/**/*.tsv
 mcr30-2016/
-**/*.tsv
 
-# --- AÑADIDO: Respaldos y reportes generados ---
+# Artefactos generados, respaldos, reportes y volcados
+backend/artifacts/
+backend/scripts/export/
 *.csv
+*.zip
 backend/reporte_*.md
-backend/debug_*.html
+backend/debug_*
+arquitectura_*.txt
+sinapsis_codigo*.txt
+codigo_proyecto*.txt
 
-# --- AÑADIDO: Sistema / editor ---
+# Sistema / editor
 .DS_Store
 Thumbs.db
 .vscode/
