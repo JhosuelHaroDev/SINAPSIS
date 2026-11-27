@@ -67,9 +67,12 @@ def extract(id_entrada: int, lema: str):
                 id_rlc=uuid.uuid4(),
                 id_lema=control.id_lema,
                 id_entrada=id_entrada,
-                lema=lema
+                lema=lema,
+                estado_procesamiento="pendiente",
             )
             db.add(rlc_db)
+        else:
+            rlc_db.estado_procesamiento = "pendiente"
             
         rlc_db.num_acepciones = rlc["conteo"]["acepciones_lema"]
         rlc_db.rlc_json = rlc

@@ -17,8 +17,10 @@ La extensión debe estar habilitada en la base: CREATE EXTENSION vector;
 
 import uuid
 
-from sqlalchemy import (Column, String, DateTime, Integer, Text, ForeignKey,
-                        Boolean, UniqueConstraint, Float)
+from sqlalchemy import (
+    Column, String, DateTime, Integer, Text, ForeignKey,
+    Boolean, UniqueConstraint, Float, Index, text,
+)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from pgvector.sqlalchemy import Vector
 
@@ -94,7 +96,9 @@ class RegistroLexicoCrudo(Base):
     rlc_json         = Column(JSONB,   nullable=False)
     texto_plano      = Column(Text)
     estado_limpieza  = Column(String(20), default="crudo")
-    fecha_extraccion = Column(DateTime(timezone=True), default=ahora_utc)
+    estado_limpieza      = Column(String(20), default="crudo")
+    estado_procesamiento = Column(String(25), default="pendiente")  # pendiente | procesado | remision_pendiente | sin_uce
+    fecha_extraccion     = Column(DateTime(timezone=True), default=ahora_utc)
 
 
 class Incidencia(Base):
@@ -193,20 +197,62 @@ class ReferenciaMCR(Base):
     glosa_en        = Column(Text)                     # definición inglesa (Princeton)
     glosa_es        = Column(Text)                     # definición española para lectura
     glosa_es_origen = Column(String(12))               # 'nativa' | 'traducida'
+    num_relaciones  = Column(Integer, default=0)       # grado relacional del synset en MCR 3.0
     creado_en       = Column(DateTime(timezone=True), default=ahora_utc)
+
+class FormaMCR(Base):
+    """
+    Índice simbólico de formas del MCR en PostgreSQL (144,728 filas).
+    Espejo de wei_spa-30_variant (word, pos, offset) para ejecutar la criba
+    simbólica de Fase 3 en milisegundos sin depender de MySQL en producción.
+    """
+    __tablename__ = "forma_mcr"
+    id     = Column(Integer, primary_key=True, autoincrement=True)
+    word   = Column(String, nullable=False, index=True)
+    pos    = Column(String, nullable=False)
+    offset = Column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("word", "pos", "offset", name="uq_forma_mcr"),
+        Index("ix_forma_mcr_word_pos", "word", "pos"),
+    )
 
 class AuditoriaValidacion(Base):
     """
-    Registro transaccional de las aprobaciones del Lexicógrafo (HU10).
+    Registro transaccional de todas las decisiones del Lexicógrafo (aceptar,
+    observar y rechazar), incluyendo correcciones de offset y tipo de relación.
     """
     __tablename__ = "auditoria_validacion"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    id_uce = Column(UUID(as_uuid=True), nullable=False)
-    lexicografo_id = Column(String(50), default="lexicografo_demo")
-    decision = Column(String(20), nullable=False)
-    offset_final = Column(String(20))
-    notas = Column(Text)
-    creado_en = Column(DateTime(timezone=True), default=ahora_utc)
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    id_uce          = Column(UUID(as_uuid=True), nullable=False)
+    lexicografo_id  = Column(String(50), default="lexicografo_demo")
+    decision        = Column(String(20), nullable=False)
+    offset_sugerido = Column(String(20))
+    offset_final    = Column(String(20))
+    tipo_relacion   = Column(String(30))  # near_synonym | has_hyperonym | variante_existente
+    notas           = Column(Text)
+    creado_en       = Column(DateTime(timezone=True), default=ahora_utc)
+
+
+class JobPipeline(Base):
+    """
+    Seguimiento persistente de tareas en segundo plano (extracción masiva,
+    procesamiento por lotes de UCEs y re-resolución de remisiones).
+    Reemplaza el estado en memoria para sobrevivir reinicios en Railway.
+    """
+    __tablename__ = "jobs_pipeline"
+    id_job         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tipo           = Column(String(40), nullable=False)  # extraccion_masiva | procesamiento_masivo | resolver_remisiones
+    estado         = Column(String(20), nullable=False, default="pendiente")  # pendiente | procesando | completado | error
+    total          = Column(Integer, default=0)
+    actual         = Column(Integer, default=0)
+    exitosos       = Column(Integer, default=0)
+    fallidos       = Column(Integer, default=0)
+    item_actual    = Column(String(160))
+    mensaje        = Column(Text, default="")
+    detalle        = Column(JSONB, default=dict)
+    creado_en      = Column(DateTime(timezone=True), default=ahora_utc)
+    actualizado_en = Column(DateTime(timezone=True), default=ahora_utc, onupdate=ahora_utc)
 
 
 # Habilita la extensión pgvector automáticamente si no existe (requiere permisos en PostgreSQL, los cuales Railway otorga por defecto)
@@ -215,12 +261,26 @@ with engine.connect() as conn:
     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     conn.commit()
 
+class LineaBaseMCR(Base):
+    """
+    Snapshot Pre-Test de los 7,954 peruanismos evaluados contra MCR 3.0 (2016).
+    Fuente inmutable de referencia para calcular CPW_pre/post, PRS_pre/post y
+    exportar las Fichas de Registro N.º 1 y N.º 2.
+    """
+    __tablename__ = "linea_base_mcr"
+    id_peruanismo  = Column(String(12), primary_key=True)   # DP-0001 .. DP-7954
+    lema           = Column(String(160), nullable=False, index=True)
+    en_mcr_pre     = Column(Integer, nullable=False, default=0)  # 0 | 1
+    synsets_pre    = Column(Integer, nullable=False, default=0)
+    relaciones_pre = Column(Integer, nullable=False, default=0)
+
 # Crea las tablas que aún no existan (idempotente; no altera las existentes).
 Base.metadata.create_all(bind=engine)
 
 __all__ = [
     "Base", "engine", "SessionLocal", "ahora_utc",
-    "ControlExtraccionLema", "RegistroLexicoCrudo", "Incidencia",
-    "UnidadConocimientoExplicito", "AuditoriaValidacion",
-    "ESTADO_PENDIENTE", "ESTADO_COMPLETA", "ESTADO_ERROR", "ReferenciaMCR",
+    "ControlExtraccionLema", "ConfiguracionExtraccion", "RegistroLexicoCrudo",
+    "Incidencia", "UnidadConocimientoExplicito", "ReferenciaMCR",
+    "FormaMCR", "AuditoriaValidacion",
+    "ESTADO_PENDIENTE", "ESTADO_COMPLETA", "ESTADO_ERROR", "LineaBaseMCR", "JobPipeline",
 ]

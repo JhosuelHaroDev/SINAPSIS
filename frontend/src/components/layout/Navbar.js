@@ -1,37 +1,40 @@
 "use client";
 
+import { Menu, LogOut } from "lucide-react";
 import { useRole } from "@/context/RoleContext";
 
-/**
- * Navbar — Barra superior institucional del área de dashboard.
- * Muestra el logo SINAPSIS, el rol activo y la opción de cerrar sesión.
- */
-export function Navbar() {
+export function Navbar({ onOpenMenu }) {
   const { rolInfo, logout } = useRole();
 
   return (
     <header className="sticky top-0 z-30 w-full bg-marino-900 border-b border-marino-600/40">
-      <div className="px-6 py-3 flex items-center justify-between">
-        {/* Logo */}
+      <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
+          <button
+            onClick={onOpenMenu}
+            aria-label="Abrir menú de navegación"
+            className="md:hidden p-1.5 rounded-md border border-marino-600/40 text-niebla/70 hover:text-acento hover:border-acento/40 transition-colors"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
           <div className="w-8 h-8 rounded-md bg-acento/15 border border-acento/40 flex items-center justify-center">
             <span className="text-acento font-display text-base font-bold">S</span>
           </div>
           <div className="leading-tight">
             <p className="font-display text-base text-niebla tracking-wide">SINAPSIS</p>
-            <p className="text-[10px] text-niebla/40 tracking-widest uppercase">
+            <p className="text-[10px] text-niebla/40 tracking-widest uppercase hidden xs:block">
               PerúNET · Curaduría Léxica
             </p>
           </div>
         </div>
 
-        {/* Rol activo + cerrar sesión */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           {rolInfo && (
             <div className="flex items-center gap-2.5">
               <div className="text-right hidden sm:block">
-                <p className="text-sm text-niebla/80">{rolInfo.nombre}</p>
-                <p className="text-[10px] text-acento/70 tracking-wide uppercase">
+                <p className="text-sm text-niebla/85">{rolInfo.nombre}</p>
+                <p className="text-[10px] text-acento/80 tracking-wide uppercase">
                   {rolInfo.etapa}
                 </p>
               </div>
@@ -42,9 +45,10 @@ export function Navbar() {
           )}
           <button
             onClick={logout}
-            className="text-xs text-niebla/40 hover:text-niebla/70 transition-colors border border-marino-600/30 hover:border-marino-600/60 rounded-md px-3 py-1.5"
+            className="inline-flex items-center gap-1.5 text-xs text-niebla/50 hover:text-niebla transition-colors border border-marino-600/40 hover:border-marino-600 rounded-md px-3 py-1.5"
           >
-            Cerrar sesión
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Cambiar rol</span>
           </button>
         </div>
       </div>

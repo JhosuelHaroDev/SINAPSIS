@@ -54,76 +54,53 @@ def export_table_to_csv(table_name, columns, filename):
 
 def main():
     print("=" * 60)
-    print("SINAPSIS — Exportación de datos para producción")
+    print("SINAPSIS — Exportación de datos para respaldo / despliegue")
     print("=" * 60)
-    print()
-    print("⚠  Los vectores (columna `vector`) NO se exportan.")
-    print("   Solo se exportan los datos que la API necesita.")
-    print()
 
-    # 1. UCE (sin vector)
-    print("[1/4] Exportando unidad_conocimiento_explicito...")
-    export_table_to_csv(
-        "unidad_conocimiento_explicito",
-        [
+    tablas = [
+        ("control_extraccion_lemas", [
+            "id_lema", "lema", "url_origen", "estado_seci",
+            "fecha_indexacion", "ultima_actualizacion", "reintentos_fallidos",
+        ], "control_extraccion_lemas.csv"),
+        ("configuracion_extraccion", [
+            "id", "url_origen", "estado_conexion", "actualizado_en",
+        ], "configuracion_extraccion.csv"),
+        ("registro_lexico_crudo", [
+            "id_rlc", "id_lema", "id_entrada", "lema", "num_acepciones",
+            "rlc_json", "texto_plano", "estado_limpieza",
+            "estado_procesamiento", "fecha_extraccion",
+        ], "registro_lexico_crudo.csv"),
+        ("unidad_conocimiento_explicito", [
             "id_uce", "id_rlc", "numero_acepcion", "lema", "pos_mcr",
-            "base_gloss", "embedding_input_gloss",
-            "glosa_origen", "marcas", "ejemplo",
-            "forma_en_mcr", "candidatos_mcr",
-            "offset_mcr", "tipo_peruanismo", "relaciones", "sim_mcr",
-            "creado_en",
-        ],
-        "uce.csv"
-    )
+            "base_gloss", "embedding_input_gloss", "glosa_origen", "marcas",
+            "ejemplo", "forma_en_mcr", "candidatos_mcr", "offset_mcr",
+            "tipo_peruanismo", "relaciones", "sim_mcr",
+            "estado_revision", "notas_revision", "creado_en",
+        ], "uce.csv"),
+        ("referencia_mcr", [
+            "offset", "pos", "sinonimos", "glosa_en", "glosa_es",
+            "glosa_es_origen", "num_relaciones", "creado_en",
+        ], "referencia_mcr.csv"),
+        ("forma_mcr", ["id", "word", "pos", "offset"], "forma_mcr.csv"),
+        ("linea_base_mcr", [
+            "id_peruanismo", "lema", "en_mcr_pre", "synsets_pre", "relaciones_pre",
+        ], "linea_base_mcr.csv"),
+        ("incidencias_procesamiento", [
+            "id", "fase", "tipo", "id_entrada", "lema", "numero_acepcion",
+            "glosa", "resultado", "pos_mcr", "genero_proximo", "justificacion",
+            "confianza", "requiere_revision", "detalle", "creado_en",
+        ], "incidencias.csv"),
+        ("auditoria_validacion", [
+            "id", "id_uce", "lexicografo_id", "decision",
+            "offset_sugerido", "offset_final", "tipo_relacion", "notas", "creado_en",
+        ], "auditoria_validacion.csv"),
+    ]
 
-    # 2. Referencia MCR (sin vector)
-    print("[2/4] Exportando referencia_mcr...")
-    export_table_to_csv(
-        "referencia_mcr",
-        ["offset", "pos", "sinonimos", "glosa_en", "glosa_es",
-         "glosa_es_origen", "creado_en"],
-        "referencia_mcr.csv"
-    )
+    for idx, (tabla, cols, archivo) in enumerate(tablas, 1):
+        print(f"[{idx}/{len(tablas)}] Exportando {tabla}...")
+        export_table_to_csv(tabla, cols, archivo)
 
-    # 3. Control extracción lemas
-    print("[3/4] Exportando control_extraccion_lemas...")
-    export_table_to_csv(
-        "control_extraccion_lemas",
-        ["id_lema", "lema", "url_origen", "estado_seci",
-         "fecha_indexacion", "ultima_actualizacion", "reintentos_fallidos"],
-        "control_extraccion_lemas.csv"
-    )
-
-    # 4. Incidencias
-    print("[4/4] Exportando incidencias_procesamiento...")
-    export_table_to_csv(
-        "incidencias_procesamiento",
-        ["id", "fase", "tipo", "id_entrada", "lema", "numero_acepcion",
-         "glosa", "resultado", "pos_mcr", "genero_proximo", "justificacion",
-         "confianza", "requiere_revision", "detalle", "creado_en"],
-        "incidencias.csv"
-    )
-
-    # 5. Registro léxico crudo (necesario para FK de UCE)
-    print("[5/5] Exportando registro_lexico_crudo (para FK)...")
-    export_table_to_csv(
-        "registro_lexico_crudo",
-        ["id_rlc", "id_lema", "id_entrada", "lema", "num_acepciones",
-         "rlc_json", "texto_plano", "fecha_extraccion"],
-        "registro_lexico_crudo.csv"
-    )
-
-    print()
-    print(f"✅ Exportación completa. Archivos en: {OUTPUT_DIR}")
-    print()
-    print("Para importar en la base de producción:")
-    print("  1. Crea las tablas con: python -c 'from app.models import *'")
-    print("  2. Importa cada CSV con:")
-    print("     \\copy control_extraccion_lemas FROM 'control_extraccion_lemas.csv' CSV HEADER")
-    print("     \\copy registro_lexico_crudo FROM 'registro_lexico_crudo.csv' CSV HEADER")
-    print("     \\copy unidad_conocimiento_explicito FROM 'uce.csv' CSV HEADER")
-    print("     \\copy referencia_mcr FROM 'referencia_mcr.csv' CSV HEADER")
-    print("     \\copy incidencias_procesamiento FROM 'incidencias.csv' CSV HEADER")
+    print(f"\n✅ Exportación completa en: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

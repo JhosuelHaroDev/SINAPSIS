@@ -2,6 +2,7 @@ import "./globals.css";
 import Providers from "./providers";
 
 export const metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://sinapsis-five.vercel.app"),
   title: "SINAPSIS",
   description: "Sistema de Ingesta, Normalización y Análisis de Peruanismos para Synsets en Integración Semántica. Plataforma de curaduría léxica desarrollada para PerúNET.",
   icons: {

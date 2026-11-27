@@ -129,24 +129,33 @@ export default function PeruanismoDetallePage() {
                 ? "Referida (remisión)"
                 : u.glosa_origen}
             </InfoRow>
-            {u.marcas && Object.keys(u.marcas).length > 0 && (
-              <InfoRow label="Marcas clasificadas">
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {Object.entries(u.marcas).map(([tipo, marcas]) => {
-                    if (!marcas || (Array.isArray(marcas) && marcas.length === 0)) return null;
-                    const marcaList = Array.isArray(marcas) ? marcas : [marcas];
-                    return marcaList.map((m) => (
-                      <span
-                        key={`${tipo}-${m}`}
-                        className="text-[11px] text-niebla/50 border border-marino-600/30 rounded px-2 py-0.5"
-                      >
-                        {tipo}: {m}
-                      </span>
-                    ));
-                  })}
-                </div>
-              </InfoRow>
-            )}
+            {u.marcas &&
+              Object.values(u.marcas).some((v) =>
+                Array.isArray(v) ? v.length > 0 : Boolean(v)
+              ) && (
+                <InfoRow label="Marcas clasificadas">
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {Object.entries(u.marcas).map(([tipo, marcas]) => {
+                      if (!marcas || (Array.isArray(marcas) && marcas.length === 0)) return null;
+                      const marcaList = Array.isArray(marcas) ? marcas : [marcas];
+                      return marcaList.map((m, idx) => {
+                        const abrev = typeof m === "string" ? m : m?.abrev;
+                        const expansion = typeof m === "object" ? m?.expansion : undefined;
+                        if (!abrev) return null;
+                        return (
+                          <span
+                            key={`${tipo}-${abrev}-${idx}`}
+                            title={expansion || undefined}
+                            className="text-[11px] text-niebla/60 border border-marino-600/30 rounded px-2 py-0.5"
+                          >
+                            <span className="capitalize text-acento/80">{tipo}:</span> {abrev}
+                          </span>
+                        );
+                      });
+                    })}
+                  </div>
+                </InfoRow>
+              )}
           </dl>
         </div>
 

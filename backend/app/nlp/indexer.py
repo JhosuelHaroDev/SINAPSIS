@@ -36,10 +36,6 @@ import uuid
 import time
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, String, DateTime, Integer
-from sqlalchemy.dialects.postgresql import UUID, insert
-from sqlalchemy.orm import declarative_base, sessionmaker
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 
@@ -77,39 +73,11 @@ logger.propagate = False
 
 
 # ==========================================================
-# 2. CONFIGURACIÓN DE BASE DE DATOS (variables en .env)
+# 2. BASE DE DATOS Y MODELOS (fuente única en app.models)
 # ==========================================================
-load_dotenv()
-DB_USER     = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST     = os.getenv("DB_HOST", "localhost")
-DB_PORT     = os.getenv("DB_PORT", "5432")
-DB_NAME     = os.getenv("DB_NAME", "sinapsis_db")
-
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-engine       = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base         = declarative_base()
-
-
-class ControlExtraccionLema(Base):
-    """
-    Tabla de control del ciclo de vida SECI de cada lema.
-    Cada fila representa un unigrama válido pendiente de extracción
-    profunda (Fase 1). El campo estado_seci rige su avance por el
-    pipeline: PENDIENTE_EXTRACCION -> EXTRACCION_COMPLETA -> ...
-    """
-    __tablename__ = "control_extraccion_lemas"
-    id_lema              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    lema                 = Column(String,   nullable=False)
-    url_origen           = Column(String,   nullable=False, unique=True)
-    estado_seci          = Column(String,   default="PENDIENTE_EXTRACCION")
-    fecha_indexacion     = Column(DateTime, default=datetime.utcnow)
-    ultima_actualizacion = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    reintentos_fallidos  = Column(Integer,  default=0)
-
-
-Base.metadata.create_all(bind=engine)
+from sqlalchemy.dialects.postgresql import insert
+from app.core.database import SessionLocal
+from app.models import ControlExtraccionLema, ESTADO_PENDIENTE
 
 
 # ==========================================================

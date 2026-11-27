@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Integer, text
 from typing import Any, Optional, Dict
 from datetime import datetime
+import uuid
 
-from app.core.database import get_db, engine
-from app.models import ControlExtraccionLema, ESTADO_PENDIENTE, RegistroLexicoCrudo, ConfiguracionExtraccion, Incidencia
+from app.core.database import get_db, engine, ahora_utc
+from app.models import ControlExtraccionLema, ESTADO_PENDIENTE, RegistroLexicoCrudo, ConfiguracionExtraccion, Incidencia, JobPipeline
 from app.services.procesamiento import ProcesadorIndividual
 
 router = APIRouter()
@@ -49,7 +50,7 @@ def get_config(db: Session = Depends(get_db)):
     """
     config = db.query(ConfiguracionExtraccion).first()
     if not config:
-        return {"url_origen": "https://diperu.apll.org.pe/lema/", "estado_conexion": "Pendiente"}
+        return {"url_origen": "https://diperu.apl.org.pe/buscar?entrada=", "estado_conexion": "Pendiente"}
     return {"url_origen": config.url_origen, "estado_conexion": config.estado_conexion}
 
 @router.put("/config")
@@ -80,14 +81,6 @@ def update_config(payload: Dict[str, str], db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"No se pudo conectar a la URL. Estado: {estado}")
     return {"status": "success", "url_origen": url, "estado_conexion": estado}
 
-# Global progress tracker for MVP
-progreso_extraccion = {
-    "estado": "Inactivo", # Inactivo, Procesando, Completado, Error
-    "total": 0,
-    "actual": 0,
-    "id_actual": None,
-    "mensaje": ""
-}
 
 def parsear_rangos(rangos_str: str) -> list[int]:
     """Convierte '1-5; 8; 10-12' en [1,2,3,4,5,8,10,11,12]."""
@@ -106,67 +99,10 @@ def parsear_rangos(rangos_str: str) -> list[int]:
             ids.add(int(parte))
     return sorted(list(ids))
 
-def tarea_extraccion_background(ids_a_extraer: list[int]):
-    global progreso_extraccion
-    progreso_extraccion["estado"] = "Procesando"
-    progreso_extraccion["total"] = len(ids_a_extraer)
-    progreso_extraccion["actual"] = 0
-    
-    import time
-    from app.core.database import SessionLocal
-    from app.services.procesamiento import ProcesadorIndividual
-    from app.models import ControlExtraccionLema
-    
-    db = SessionLocal()
-    try:
-        for idx, id_lema in enumerate(ids_a_extraer):
-            progreso_extraccion["actual"] = idx + 1
-            progreso_extraccion["id_actual"] = id_lema
-            progreso_extraccion["mensaje"] = f"Extrayendo ID {id_lema}..."
-            
-            # Buscar el lema en control (opcional)
-            control = db.query(ControlExtraccionLema).filter(
-                ControlExtraccionLema.url_origen.like(f"%entrada={id_lema}%")
-            ).first()
-            lema = control.lema if control else f"lema_desconocido_{id_lema}"
-            
-            # Retardo para no saturar
-            time.sleep(1)
-            try:
-                # Usar el ProcesadorIndividual estático
-                ProcesadorIndividual.extraer_diperu(id_lema, lema)
-                progreso_extraccion["mensaje"] = f"ID {id_lema} extraído correctamente."
-            except Exception as e:
-                print(f"Error extrayendo {id_lema}: {e}")
-                progreso_extraccion["mensaje"] = f"Error en ID {id_lema}: {str(e)}"
-                
-        progreso_extraccion["estado"] = "Completado"
-        progreso_extraccion["mensaje"] = "Extracción masiva finalizada con éxito."
-    except Exception as e:
-        progreso_extraccion["estado"] = "Error"
-        progreso_extraccion["mensaje"] = f"Error fatal: {str(e)}"
-    finally:
-        db.close()
 
 @router.post("/extraccion-masiva")
-def iniciar_extraccion_masiva(payload: Dict[str, str], background_tasks: BackgroundTasks):
-    """Inicia un proceso asíncrono de extracción por lotes.
-
-    Recibe una cadena con rangos de IDs (ej. "1-50; 60; 70-80"), los valida
-    y lanza una tarea en segundo plano que extraerá secuencialmente cada uno
-    desde DiPerú, previniendo cuellos de botella en la respuesta HTTP.
-
-    Args:
-        payload (dict): Contiene la clave 'rangos' con la cadena de texto.
-        background_tasks (BackgroundTasks): Gestor de tareas en 2do plano de FastAPI.
-
-    Returns:
-        dict: Estado de inicio y total de entradas estimadas a procesar.
-
-    Raises:
-        HTTPException (400): Si el formato del rango es inválido o si ya hay 
-        una extracción en curso.
-    """
+def iniciar_extraccion_masiva(payload: Dict[str, str], db: Session = Depends(get_db)):
+    """Inicia extracción masiva persistente usando 1 sola sesión Chromium."""
     rangos_str = payload.get("rangos", "")
     try:
         ids_a_extraer = parsear_rangos(rangos_str)
@@ -174,21 +110,84 @@ def iniciar_extraccion_masiva(payload: Dict[str, str], background_tasks: Backgro
         raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         raise HTTPException(status_code=400, detail="Formato de rangos inválido.")
-        
+
     if not ids_a_extraer:
         raise HTTPException(status_code=400, detail="No hay IDs válidos para extraer.")
-        
-    global progreso_extraccion
-    if progreso_extraccion["estado"] == "Procesando":
-        raise HTTPException(status_code=400, detail="Ya hay una extracción en curso.")
-        
-    background_tasks.add_task(tarea_extraccion_background, ids_a_extraer)
-    return {"status": "Iniciado", "total_estimado": len(ids_a_extraer)}
+
+    en_curso = (
+        db.query(JobPipeline)
+        .filter(
+            JobPipeline.tipo == "extraccion_masiva",
+            JobPipeline.estado == "procesando",
+        )
+        .first()
+    )
+    if en_curso:
+        raise HTTPException(status_code=400, detail="Ya hay una extracción masiva en curso.")
+
+    job = JobPipeline(
+        id_job=uuid.uuid4(),
+        tipo="extraccion_masiva",
+        estado="procesando",
+        total=len(ids_a_extraer),
+        actual=0,
+        mensaje="Iniciando lote de extracción...",
+        detalle={"ids": ids_a_extraer, "errores": []},
+    )
+    db.add(job)
+    db.commit()
+
+    script_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "scripts",
+        "extract_batch.py",
+    )
+    subprocess.Popen([sys.executable, script_path, str(job.id_job)])
+
+    return {
+        "status": "Iniciado",
+        "id_job": str(job.id_job),
+        "total_estimado": len(ids_a_extraer),
+    }
+
 
 @router.get("/progreso-extraccion")
-def get_progreso_extraccion():
-    global progreso_extraccion
-    return progreso_extraccion
+def get_progreso_extraccion(db: Session = Depends(get_db)):
+    """Consulta el progreso persistente del último lote de extracción."""
+    job = (
+        db.query(JobPipeline)
+        .filter(JobPipeline.tipo == "extraccion_masiva")
+        .order_by(JobPipeline.creado_en.desc())
+        .first()
+    )
+    if not job:
+        return {
+            "estado": "Inactivo",
+            "total": 0,
+            "actual": 0,
+            "exitosos": 0,
+            "fallidos": 0,
+            "id_actual": None,
+            "mensaje": "",
+        }
+
+    mapa_estado = {
+        "pendiente": "Procesando",
+        "procesando": "Procesando",
+        "completado": "Completado",
+        "error": "Error",
+    }
+    return {
+        "id_job": str(job.id_job),
+        "estado": mapa_estado.get(job.estado, "Inactivo"),
+        "total": job.total,
+        "actual": job.actual,
+        "exitosos": job.exitosos,
+        "fallidos": job.fallidos,
+        "id_actual": job.item_actual,
+        "mensaje": job.mensaje,
+        "errores": (job.detalle or {}).get("errores", []),
+    }
 
 @router.get("/pendientes")
 def get_pendientes(
@@ -256,8 +255,6 @@ def get_pendientes(
         ]
     }
 
-from app.models import RegistroLexicoCrudo
-
 @router.get("/extraidos")
 def get_extraidos(
     db: Session = Depends(get_db),
@@ -322,36 +319,13 @@ def get_extraidos(
                 "id_entrada": i.id_entrada,
                 "lema": i.lema,
                 "num_acepciones": i.num_acepciones,
+                "estado_limpieza": i.estado_limpieza or "crudo",
+                "estado_procesamiento": i.estado_procesamiento or "pendiente",
                 "fecha_extraccion": i.fecha_extraccion.isoformat() if i.fecha_extraccion else None,
                 "rlc_json": i.rlc_json
             } for i in items
         ]
     }
-
-@router.post("/extraer/{id_entrada}")
-def procesar_lema(id_entrada: int, lema: str = None, db: Session = Depends(get_db)) -> Any:
-    """Ejecuta el pipeline SECI a partir de un ID de DiPerú."""
-    try:
-        # Si no se pasó lema, intentamos inferirlo
-        if not lema:
-            control = db.query(ControlExtraccionLema).filter(
-                ControlExtraccionLema.url_origen.like(f"%entrada={id_entrada}%")
-            ).first()
-            if control:
-                lema = control.lema
-            else:
-                lema = f"lema_desconocido_{id_entrada}"
-                
-        resultado = ProcesadorIndividual.extraer_diperu(id_entrada, lema)
-        return {
-            "status": "ok", 
-            "id_entrada": id_entrada, 
-            "lema": resultado["lema"],
-            "rlc_json": resultado["rlc_json"],
-            "uces_generados": 0
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 import subprocess
 import os

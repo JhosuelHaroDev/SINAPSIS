@@ -1,31 +1,70 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { 
-  fetchIngenieroPendientes, 
-  fetchIngenieroExtraidos, 
-  extraerDiPeru, 
+import { useState, useEffect, useCallback } from "react";
+import {
+  RefreshCw,
+  SlidersHorizontal,
+  Download,
+  Code,
+  FileJson,
+  Play,
+  Settings,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Edit3,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
+import {
+  fetchIngenieroConfig,
+  updateIngenieroConfig,
+  fetchIngenieroPendientes,
+  fetchIngenieroExtraidos,
+  extraerDiPeru,
   fetchHtmlCrudo,
   iniciarExtraccionMasiva,
   fetchProgresoExtraccion,
-  limpiarRlc
+  limpiarRlc,
 } from "@/services/api";
+import { Toast } from "@/components/ui/Toast";
+import { Modal } from "@/components/ui/Modal";
+import { Pagination } from "@/components/ui/Pagination";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const PAGE_SIZE = 20;
+
+const ESTADO_PROC_BADGE = {
+  pendiente: {
+    label: "En cola Analista",
+    cls: "bg-sky-500/10 text-sky-300 border-sky-500/25",
+  },
+  procesado: {
+    label: "Procesado",
+    cls: "bg-emerald-500/10 text-emerald-300 border-emerald-500/25",
+  },
+  remision_pendiente: {
+    label: "Remisión pend.",
+    cls: "bg-amber-500/10 text-amber-300 border-amber-500/25",
+  },
+  sin_uce: {
+    label: "Sin UCE",
+    cls: "bg-niebla/10 text-niebla/55 border-niebla/20",
+  },
+};
 
 export default function IngenieroPage() {
-  const [activeTab, setActiveTab] = useState("pendientes"); // "pendientes" | "extraidos"
+  const [activeTab, setActiveTab] = useState("pendientes");
+  const [toast, setToast] = useState({ message: "", type: "info" });
 
-  // -- Estados compartidos --
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-
-  // -- Estados de Pendientes --
+  // ── Pendientes ────────────────────────────────────────────────────────────
   const [pendientes, setPendientes] = useState([]);
   const [totalPendientes, setTotalPendientes] = useState(0);
-  const [loadingPendientes, setLoadingPendientes] = useState(true);
+  const [loadingP, setLoadingP] = useState(true);
   const [extractingId, setExtractingId] = useState(null);
-  
+  const [showFiltersP, setShowFiltersP] = useState(true);
+
   const [letraP, setLetraP] = useState("");
   const [idExactoP, setIdExactoP] = useState("");
   const [idDesdeP, setIdDesdeP] = useState("");
@@ -33,15 +72,16 @@ export default function IngenieroPage() {
   const [ordenP, setOrdenP] = useState("asc");
   const [pageP, setPageP] = useState(1);
 
-  // Extracción Masiva
+  // Extracción masiva
   const [rangoExtraccion, setRangoExtraccion] = useState("");
   const [masivaProgress, setMasivaProgress] = useState(null);
 
-  // -- Estados de Extraídos --
+  // ── Extraídos ─────────────────────────────────────────────────────────────
   const [extraidos, setExtraidos] = useState([]);
   const [totalExtraidos, setTotalExtraidos] = useState(0);
-  const [loadingExtraidos, setLoadingExtraidos] = useState(true);
-  
+  const [loadingE, setLoadingE] = useState(true);
+  const [showFiltersE, setShowFiltersE] = useState(false);
+
   const [letraE, setLetraE] = useState("");
   const [idExactoE, setIdExactoE] = useState("");
   const [idDesdeE, setIdDesdeE] = useState("");
@@ -51,440 +91,448 @@ export default function IngenieroPage() {
   const [ordenE, setOrdenE] = useState("asc");
   const [pageE, setPageE] = useState(1);
 
-  // -- Estados de Modales --
-  const [htmlModalOpen, setHtmlModalOpen] = useState(false);
-  const [htmlContent, setHtmlContent] = useState("");
+  // ── Modales ───────────────────────────────────────────────────────────────
+  const [htmlModal, setHtmlModal] = useState({ open: false, id: null, html: "" });
   const [loadingHtmlId, setLoadingHtmlId] = useState(null);
 
-  const [rlcModalOpen, setRlcModalOpen] = useState(false);
-  const [rlcContent, setRlcContent] = useState(null);
-  const [activeRlcId, setActiveRlcId] = useState(null);
-  
-  // Limpieza manual
+  const [rlcModal, setRlcModal] = useState({
+    open: false,
+    id_rlc: null,
+    lema: "",
+    content: null,
+  });
   const [isEditingRlc, setIsEditingRlc] = useState(false);
   const [editableRlcJson, setEditableRlcJson] = useState("");
   const [editMotivo, setEditMotivo] = useState("");
+  const [jsonError, setJsonError] = useState("");
   const [savingLimpio, setSavingLimpio] = useState(false);
 
-  // Configuración
-  const [urlConfig, setUrlConfig] = useState("https://diperu.apll.org.pe/lema/");
+  // ── Configuración fuente ──────────────────────────────────────────────────
+  const [showConfig, setShowConfig] = useState(false);
+  const [urlConfig, setUrlConfig] = useState("https://diperu.apl.org.pe/buscar?entrada=");
   const [configStatus, setConfigStatus] = useState("Pendiente");
   const [savingConfig, setSavingConfig] = useState(false);
 
-  // Load config on mount
-  useEffect(() => {
-    fetch(`${API_URL}/api/ingeniero/config`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.url_origen) setUrlConfig(data.url_origen);
-        if (data.estado_conexion) setConfigStatus(data.estado_conexion);
-      })
-      .catch(err => console.error("Error loading config:", err));
-  }, []);
+  const notify = (message, type = "info") => setToast({ message, type });
 
-  const handleSaveConfig = async () => {
-    setSavingConfig(true);
-    try {
-      const resp = await fetch(`${API_URL}/api/ingeniero/config`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url_origen: urlConfig })
-      });
-      if (!resp.ok) {
-        const errData = await resp.json();
-        throw new Error(errData.detail || "Error al conectar");
-      }
-      const data = await resp.json();
-      setConfigStatus(data.estado_conexion);
-      setSuccess("Conexión establecida correctamente.");
-    } catch (err) {
-      setError(`Fallo de conexión: ${err.message}`);
-      setConfigStatus("Fallo");
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  const loadPendientes = async () => {
-    setLoadingPendientes(true);
+  const loadPendientes = useCallback(async (overridePage) => {
+    setLoadingP(true);
     try {
       const data = await fetchIngenieroPendientes({
-        page: pageP,
-        size: 20,
+        page: overridePage ?? pageP,
+        size: PAGE_SIZE,
         letra: letraP || undefined,
         id_exacto: idExactoP || undefined,
         id_desde: idDesdeP || undefined,
         id_hasta: idHastaP || undefined,
-        orden: ordenP
+        orden: ordenP,
       });
       setPendientes(data.items || []);
       setTotalPendientes(data.total || 0);
     } catch (err) {
-      setError("Error al cargar pendientes");
+      notify(`Error al cargar pendientes: ${err.message}`, "error");
     } finally {
-      setLoadingPendientes(false);
+      setLoadingP(false);
     }
-  };
+  }, [pageP, letraP, idExactoP, idDesdeP, idHastaP, ordenP]);
 
-  const loadExtraidos = async () => {
-    setLoadingExtraidos(true);
+  const loadExtraidos = useCallback(async (overridePage) => {
+    setLoadingE(true);
     try {
       const data = await fetchIngenieroExtraidos({
-        page: pageE,
-        size: 20,
+        page: overridePage ?? pageE,
+        size: PAGE_SIZE,
         letra: letraE || undefined,
         id_exacto: idExactoE || undefined,
         id_desde: idDesdeE || undefined,
         id_hasta: idHastaE || undefined,
         acepciones_min: minAcepciones || undefined,
         acepciones_max: maxAcepciones || undefined,
-        orden: ordenE
+        orden: ordenE,
       });
       setExtraidos(data.items || []);
       setTotalExtraidos(data.total || 0);
     } catch (err) {
-      setError("Error al cargar extraídos");
+      notify(`Error al cargar extraídos: ${err.message}`, "error");
     } finally {
-      setLoadingExtraidos(false);
+      setLoadingE(false);
     }
-  };
+  }, [pageE, letraE, idExactoE, idDesdeE, idHastaE, minAcepciones, maxAcepciones, ordenE]);
+
+  // Cargar configuración + comprobar si existe job activo al montar
+  useEffect(() => {
+    fetchIngenieroConfig()
+      .then((data) => {
+        if (data.url_origen) setUrlConfig(data.url_origen);
+        if (data.estado_conexion) setConfigStatus(data.estado_conexion);
+      })
+      .catch(() => {});
+
+    fetchProgresoExtraccion()
+      .then((progreso) => {
+        if (progreso && progreso.estado === "Procesando") {
+          setMasivaProgress(progreso);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    if (activeTab === "pendientes") {
-      loadPendientes();
-    } else {
-      loadExtraidos();
-    }
-  }, [activeTab, pageP, ordenP, pageE, ordenE]); 
+    if (activeTab === "pendientes") loadPendientes();
+    else loadExtraidos();
+  }, [activeTab, pageP, ordenP, pageE, ordenE]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -- Handlers Pendientes --
-  const handleApplyFiltersP = () => { setPageP(1); loadPendientes(); };
-  const handleClearFiltersP = () => {
-    setLetraP(""); setIdExactoP(""); setIdDesdeP(""); setIdHastaP(""); setOrdenP("asc"); setPageP(1);
-    setTimeout(loadPendientes, 0);
+  // Polling de extracción masiva
+  useEffect(() => {
+    if (!masivaProgress || masivaProgress.estado !== "Procesando") return;
+    const interval = setInterval(async () => {
+      try {
+        const prog = await fetchProgresoExtraccion();
+        setMasivaProgress(prog);
+        if (prog.estado === "Completado" || prog.estado === "Error") {
+          clearInterval(interval);
+          if (prog.estado === "Completado") {
+            notify(prog.mensaje || "Extracción masiva finalizada.", "success");
+            loadPendientes();
+            loadExtraidos();
+          } else {
+            notify(prog.mensaje || "Error en extracción masiva.", "error");
+          }
+        }
+      } catch {
+        // Reintenta en el próximo ciclo
+      }
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [masivaProgress?.estado]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleSaveConfig = async () => {
+    setSavingConfig(true);
+    try {
+      const data = await updateIngenieroConfig(urlConfig);
+      setConfigStatus(data.estado_conexion);
+      notify("Conexión con DiPerú validada y guardada.", "success");
+    } catch (err) {
+      setConfigStatus("Fallo");
+      notify(`Fallo de conexión: ${err.message}`, "error");
+    } finally {
+      setSavingConfig(false);
+    }
   };
 
   const handleExtract = async (id, lema) => {
     setExtractingId(id);
-    setError("");
-    setSuccess("");
     try {
-      const res = await extraerDiPeru(parseInt(id), lema || "Custom");
-      setSuccess(`Extracción exitosa: ${res.lema} (Acepciones: ${res.rlc_json.conteo.acepciones_lema})`);
+      const res = await extraerDiPeru(parseInt(id, 10), lema || "Custom");
+      notify(
+        `Extraído "${res.lema}" (${res.rlc_json?.conteo?.acepciones_lema ?? 0} acepciones).`,
+        "success"
+      );
       loadPendientes();
     } catch (err) {
-      setError(`Error extrayendo ${id}: ${err.message}`);
+      notify(`Error extrayendo ID ${id}: ${err.message}`, "error");
     } finally {
       setExtractingId(null);
     }
   };
 
-  // Extracción masiva
   const handleExtraccionMasiva = async () => {
-    setError("");
-    setSuccess("");
     try {
       const resp = await iniciarExtraccionMasiva(rangoExtraccion);
-      setMasivaProgress({ estado: "Procesando", actual: 0, total: resp.total_estimado || 1, mensaje: "Iniciando..." });
+      setMasivaProgress({
+        estado: "Procesando",
+        actual: 0,
+        total: resp.total_estimado || 1,
+        exitosos: 0,
+        fallidos: 0,
+        mensaje: "Iniciando sesión de Chromium...",
+      });
+      notify(`Lote iniciado (${resp.total_estimado} IDs).`, "info");
     } catch (err) {
-      setError(err.message);
+      notify(err.message, "error");
     }
   };
 
-  useEffect(() => {
-    let interval = null;
-    if (masivaProgress && masivaProgress.estado === "Procesando") {
-      interval = setInterval(async () => {
-        try {
-          const progreso = await fetchProgresoExtraccion();
-          setMasivaProgress(progreso);
-          if (progreso.estado === "Completado" || progreso.estado === "Error") {
-            clearInterval(interval);
-            if (progreso.estado === "Completado") {
-              setSuccess("Extracción masiva completada exitosamente.");
-              loadPendientes();
-            } else {
-              setError(`Error en extracción masiva: ${progreso.mensaje}`);
-            }
-          }
-        } catch (e) {
-          console.error(e);
-        }
-      }, 1000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [masivaProgress]);
-
   const handleViewHtml = async (id) => {
     setLoadingHtmlId(id);
-    setError("");
     try {
-      const res = await fetchHtmlCrudo(parseInt(id));
-      setHtmlContent(res.html);
-      setHtmlModalOpen(true);
+      const res = await fetchHtmlCrudo(parseInt(id, 10));
+      setHtmlModal({ open: true, id, html: res.html });
     } catch (err) {
-      setError(`Error obteniendo HTML: ${err.message}`);
+      notify(`Error obteniendo HTML: ${err.message}`, "error");
     } finally {
       setLoadingHtmlId(null);
     }
   };
 
-  // -- Handlers Extraídos --
-  const handleApplyFiltersE = () => { setPageE(1); loadExtraidos(); };
-  const handleClearFiltersE = () => {
-    setLetraE(""); setIdExactoE(""); setIdDesdeE(""); setIdHastaE(""); setMinAcepciones(""); setMaxAcepciones(""); setOrdenE("asc"); setPageE(1);
-    setTimeout(loadExtraidos, 0);
-  };
-
-  const handleViewRlc = (id_rlc, rlc_json) => {
-    setActiveRlcId(id_rlc);
-    setRlcContent(rlc_json);
-    setEditableRlcJson(JSON.stringify(rlc_json, null, 2));
+  const openRlcModal = (row) => {
+    setRlcModal({ open: true, id_rlc: row.id_rlc, lema: row.lema, content: row.rlc_json });
+    setEditableRlcJson(JSON.stringify(row.rlc_json, null, 2));
     setIsEditingRlc(false);
     setEditMotivo("");
-    setRlcModalOpen(true);
+    setJsonError("");
   };
 
   const handleSaveLimpieza = async () => {
     if (!editMotivo.trim()) {
-      alert("El motivo de la edición es obligatorio.");
+      setJsonError("El motivo de la edición es obligatorio para auditoría.");
       return;
     }
+    let parsed;
     try {
-      JSON.parse(editableRlcJson); // Validar JSON
+      parsed = JSON.parse(editableRlcJson);
+      setJsonError("");
     } catch (e) {
-      alert("El JSON no es válido. Corrija los errores de formato.");
+      setJsonError(`JSON inválido: ${e.message}`);
       return;
     }
 
     setSavingLimpio(true);
     try {
-      await limpiarRlc(activeRlcId, JSON.parse(editableRlcJson), editMotivo);
-      setSuccess("RLC limpiado y guardado correctamente.");
-      setRlcModalOpen(false);
+      await limpiarRlc(rlcModal.id_rlc, parsed, editMotivo.trim());
+      notify(`RLC de "${rlcModal.lema}" actualizado y registrado en auditoría.`, "success");
+      setRlcModal({ open: false, id_rlc: null, lema: "", content: null });
       loadExtraidos();
     } catch (err) {
-      alert(`Error al limpiar: ${err.message}`);
+      setJsonError(err.message);
     } finally {
       setSavingLimpio(false);
     }
   };
 
-  useEffect(() => {
-    if (success) {
-      const timer = setTimeout(() => setSuccess(""), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [success]);
+  const handleClearP = () => {
+    setLetraP(""); setIdExactoP(""); setIdDesdeP(""); setIdHastaP(""); setOrdenP("asc"); setPageP(1);
+    setTimeout(() => loadPendientes(1), 0);
+  };
 
-  useEffect(() => {
-    if (error) {
-      const timer = setTimeout(() => setError(""), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [error]);
+  const handleClearE = () => {
+    setLetraE(""); setIdExactoE(""); setIdDesdeE(""); setIdHastaE("");
+    setMinAcepciones(""); setMaxAcepciones(""); setOrdenE("asc"); setPageE(1);
+    setTimeout(() => loadExtraidos(1), 0);
+  };
 
-  // Collapsible states
-  const [showConfig, setShowConfig] = useState(false);
-  const [showFiltersP, setShowFiltersP] = useState(false);
-  const [showFiltersE, setShowFiltersE] = useState(false);
+  const totalPagesP = Math.ceil(totalPendientes / PAGE_SIZE);
+  const totalPagesE = Math.ceil(totalExtraidos / PAGE_SIZE);
 
   return (
-    <div className="space-y-6 relative">
-      
-      {/* Toast Notifications */}
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2">
-        {error && (
-          <div className="bg-red-900/90 backdrop-blur text-red-400 px-4 py-3 rounded shadow-lg border border-red-900/50 flex items-center gap-3 animate-fade-in">
-            <span>{error}</span>
-            <button onClick={() => setError("")} className="text-red-400 hover:text-white">✕</button>
-          </div>
-        )}
-        {success && (
-          <div className="bg-green-900/90 backdrop-blur text-green-400 px-4 py-3 rounded shadow-lg border border-green-900/50 flex items-center gap-3 animate-fade-in">
-            <span>{success}</span>
-            <button onClick={() => setSuccess("")} className="text-green-400 hover:text-white">✕</button>
-          </div>
-        )}
-      </div>
+    <div className="space-y-6">
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: "", type: "info" })}
+      />
 
-      <header className="mb-6">
-        <h1 className="text-2xl font-serif text-acento mb-2">Ingeniería de Datos</h1>
-        <p className="text-niebla/70">Gestión del ciclo de vida de los datos crudos: extracción, limpieza y empaquetado.</p>
-      </header>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <p className="text-acento text-xs tracking-[0.25em] uppercase mb-2">
+            Fase 1 · Socialización
+          </p>
+          <h1 className="font-display text-2xl sm:text-3xl text-niebla leading-tight">
+            Ingeniería de Datos e Ingesta
+          </h1>
+          <p className="text-niebla/55 text-sm mt-1.5">
+            Extracción fiel desde el DiPerú y depuración auditable de Registros Léxicos Crudos (RLC).
+          </p>
+        </div>
+
+        <button
+          onClick={() => (activeTab === "pendientes" ? loadPendientes() : loadExtraidos())}
+          className="inline-flex items-center gap-2 self-start sm:self-auto px-3.5 py-2 text-xs rounded-md border border-marino-600/50 text-niebla/70 hover:text-acento hover:border-acento/40 transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Refrescar
+        </button>
+      </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-marino-700">
+      <div className="flex gap-2 border-b border-marino-600/40">
         <button
           onClick={() => setActiveTab("pendientes")}
-          className={`px-4 py-2 font-medium transition-colors border-b-2 ${
-            activeTab === "pendientes" 
-              ? "border-acento text-acento bg-marino-800/50" 
-              : "border-transparent text-niebla/60 hover:text-niebla hover:bg-marino-800/30"
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === "pendientes"
+              ? "border-acento text-acento"
+              : "border-transparent text-niebla/55 hover:text-niebla"
           }`}
         >
-          Bandeja de Entrada (Pendientes)
+          Bandeja de Entrada
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-marino-900 border border-marino-600/50 text-niebla/75">
+            {totalPendientes.toLocaleString("es-PE")}
+          </span>
         </button>
+
         <button
           onClick={() => setActiveTab("extraidos")}
-          className={`px-4 py-2 font-medium transition-colors border-b-2 ${
-            activeTab === "extraidos" 
-              ? "border-acento text-acento bg-marino-800/50" 
-              : "border-transparent text-niebla/60 hover:text-niebla hover:bg-marino-800/30"
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === "extraidos"
+              ? "border-acento text-acento"
+              : "border-transparent text-niebla/55 hover:text-niebla"
           }`}
         >
-          Bandeja de Salida (Extraídos)
+          Bandeja de Salida (RLC)
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-marino-900 border border-marino-600/50 text-niebla/75">
+            {totalExtraidos.toLocaleString("es-PE")}
+          </span>
         </button>
       </div>
 
-      <div className="bg-marino-800 rounded-lg border border-marino-700 overflow-hidden shadow-xl">
-        {/* ============================================================== */}
-        {/* PENDIENTES TAB */}
-        {/* ============================================================== */}
-        {activeTab === "pendientes" && (
-          <div className="flex flex-col">
-            <div className="p-4 border-b border-marino-700 bg-marino-900/50">
-              <div className="flex justify-between items-center">
-                <div className="flex gap-4 items-center">
-                  <span className="text-sm font-bold text-niebla/80 bg-marino-800 px-3 py-1 rounded border border-marino-600">Total Pendientes: {totalPendientes}</span>
-                  <button onClick={loadPendientes} className="text-xs text-niebla/60 hover:text-acento transition-colors">↻ Refrescar</button>
-                </div>
-                <button 
-                  onClick={() => setShowFiltersP(!showFiltersP)} 
-                  className="text-xs bg-marino-700 hover:bg-marino-600 text-niebla px-3 py-1.5 rounded transition-colors"
-                >
-                  {showFiltersP ? "Ocultar Filtros y Herramientas" : "Mostrar Filtros y Herramientas"}
-                </button>
+      {/* ══════════════════ TAB PENDIENTES ══════════════════ */}
+      {activeTab === "pendientes" && (
+        <div className="space-y-4">
+          {/* Herramienta de Extracción Masiva */}
+          <div className="bg-marino-900/60 border border-marino-600/40 rounded-lg p-4">
+            <div className="flex flex-col lg:flex-row gap-3 lg:items-end">
+              <div className="flex-1">
+                <label className="text-[11px] uppercase tracking-wider text-acento/90 font-medium block mb-1.5">
+                  Extracción Masiva por Lotes (1 sesión Chromium)
+                </label>
+                <input
+                  type="text"
+                  value={rangoExtraccion}
+                  onChange={(e) => setRangoExtraccion(e.target.value)}
+                  placeholder="Ej: 1-50; 64; 100-120"
+                  className="w-full bg-marino-800 border border-marino-600/60 rounded-md px-3 py-2 text-sm text-niebla placeholder:text-niebla/30 focus:border-acento focus:outline-none"
+                />
               </div>
-              
-              {showFiltersP && (
-                <div className="mt-4 pt-4 border-t border-marino-700/50 flex flex-col gap-4 animate-fade-in">
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <select 
-                      value={letraP} 
-                      onChange={e => setLetraP(e.target.value)}
-                      className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none focus:border-acento"
-                    >
-                      <option value="">Cualquier letra</option>
-                      {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(l => (
-                        <option key={l} value={l}>{l}</option>
-                      ))}
-                    </select>
-                    <input 
-                      type="number" 
-                      placeholder="ID Exacto" 
-                      value={idExactoP} 
-                      onChange={e => setIdExactoP(e.target.value)}
-                      className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                    />
-                    <span className="text-niebla/50">o</span>
-                    <input 
-                      type="number" 
-                      placeholder="Desde ID" 
-                      value={idDesdeP} 
-                      onChange={e => setIdDesdeP(e.target.value)}
-                      className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                    />
-                    <input 
-                      type="number" 
-                      placeholder="Hasta ID" 
-                      value={idHastaP} 
-                      onChange={e => setIdHastaP(e.target.value)}
-                      className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                    />
-                    <select 
-                      value={ordenP} 
-                      onChange={e => setOrdenP(e.target.value)}
-                      className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none ml-auto focus:border-acento"
-                    >
-                      <option value="asc">A-Z</option>
-                      <option value="desc">Z-A</option>
-                    </select>
-                    <button onClick={handleApplyFiltersP} className="bg-marino-600 hover:bg-marino-500 px-3 py-1.5 rounded transition-colors">
-                      Filtrar
-                    </button>
-                    <button onClick={handleClearFiltersP} className="text-niebla/50 hover:text-niebla px-2">
-                      Limpiar
-                    </button>
-                  </div>
-
-                  {/* Ingesta Masiva */}
-                  <div className="p-3 bg-marino-900 rounded border border-marino-700 flex flex-wrap gap-4 items-end">
-                    <div className="flex-1">
-                      <label className="text-xs text-niebla/60 block mb-1">Extracción Masiva Inteligente (ej. 1-50; 56; 67-78)</label>
-                      <input 
-                        type="text" 
-                        value={rangoExtraccion}
-                        onChange={e => setRangoExtraccion(e.target.value)}
-                        placeholder="Rangos de IDs separados por punto y coma..."
-                        className="w-full bg-marino-800 border border-marino-600 rounded px-3 py-2 text-sm text-niebla outline-none focus:border-acento"
-                      />
-                    </div>
-                    <button 
-                      onClick={handleExtraccionMasiva}
-                      disabled={!rangoExtraccion || (masivaProgress && masivaProgress.estado === "Procesando")}
-                      className="bg-acento hover:bg-acento-claro text-marino-900 font-bold px-4 py-2 rounded transition-colors disabled:opacity-50 h-[38px]"
-                    >
-                      Iniciar Extracción Lotes
-                    </button>
-                  </div>
-                </div>
-              )}
+              <button
+                onClick={handleExtraccionMasiva}
+                disabled={
+                  !rangoExtraccion.trim() ||
+                  (masivaProgress && masivaProgress.estado === "Procesando")
+                }
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-acento text-marino-900 text-sm font-semibold hover:brightness-110 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4" />
+                Iniciar Extracción
+              </button>
+              <button
+                onClick={() => setShowFiltersP((v) => !v)}
+                className="inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md border border-marino-600/50 text-xs text-niebla/70 hover:text-niebla hover:bg-marino-700/40 transition-colors"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                {showFiltersP ? "Ocultar filtros" : "Filtros"}
+              </button>
             </div>
-            
-            {loadingPendientes ? (
-              <div className="p-8 text-center text-niebla/50 flex-1">Cargando pendientes...</div>
+
+            {showFiltersP && (
+              <div className="mt-4 pt-4 border-t border-marino-600/30 flex flex-wrap items-center gap-2.5 text-sm">
+                <select
+                  value={letraP}
+                  onChange={(e) => setLetraP(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla focus:border-acento focus:outline-none"
+                >
+                  <option value="">Letra: todas</option>
+                  {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  placeholder="ID exacto"
+                  value={idExactoP}
+                  onChange={(e) => setIdExactoP(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-28 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Desde ID"
+                  value={idDesdeP}
+                  onChange={(e) => setIdDesdeP(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-28 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Hasta ID"
+                  value={idHastaP}
+                  onChange={(e) => setIdHastaP(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-28 focus:border-acento focus:outline-none"
+                />
+                <select
+                  value={ordenP}
+                  onChange={(e) => setOrdenP(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla focus:border-acento focus:outline-none"
+                >
+                  <option value="asc">Orden: A → Z</option>
+                  <option value="desc">Orden: Z → A</option>
+                </select>
+                <div className="flex gap-2 ml-auto">
+                  <button
+                    onClick={() => { setPageP(1); loadPendientes(1); }}
+                    className="px-3.5 py-1.5 rounded-md bg-marino-700 hover:bg-marino-600 text-niebla text-xs font-medium transition-colors"
+                  >
+                    Aplicar
+                  </button>
+                  <button
+                    onClick={handleClearP}
+                    className="px-2.5 py-1.5 text-xs text-niebla/50 hover:text-niebla transition-colors"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Tabla Pendientes */}
+          <div className="bg-marino-900/40 border border-marino-600/30 rounded-lg overflow-hidden">
+            {loadingP ? (
+              <LoadingSpinner text="Cargando lemas pendientes…" />
             ) : pendientes.length === 0 ? (
-              <div className="p-8 text-center text-niebla/50 flex-1">No hay lemas pendientes en la cola con los filtros actuales.</div>
+              <div className="py-16 text-center text-niebla/45 text-sm">
+                No hay lemas pendientes con los filtros actuales.
+              </div>
             ) : (
-              <div className="overflow-x-auto flex-1">
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-marino-900 text-niebla/70 text-xs uppercase">
+                  <thead className="bg-marino-900 text-niebla/50 text-[11px] uppercase tracking-wider border-b border-marino-600/30">
                     <tr>
                       <th className="px-4 py-3 font-medium">Lema</th>
-                      <th className="px-4 py-3 font-medium">ID Entrada</th>
-                      <th className="px-4 py-3 font-medium">URL Origen</th>
+                      <th className="px-4 py-3 font-medium">ID DiPerú</th>
+                      <th className="px-4 py-3 font-medium">Fuente</th>
                       <th className="px-4 py-3 font-medium text-right">Acciones</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-marino-700/50">
+                  <tbody className="divide-y divide-marino-600/20">
                     {pendientes.map((p) => {
                       let id = "";
                       try {
-                        const url = new URL(p.url_origen);
-                        id = url.searchParams.get("entrada");
-                      } catch(e) {}
+                        id = new URL(p.url_origen).searchParams.get("entrada") || "";
+                      } catch {}
                       return (
-                        <tr key={p.id_lema} className="hover:bg-marino-700/20 transition-colors">
-                          <td className="px-4 py-3 font-medium text-niebla">{p.lema}</td>
-                          <td className="px-4 py-3 text-niebla/70 font-mono">{id}</td>
-                          <td className="px-4 py-3 text-niebla/60 truncate max-w-xs">
-                            <a 
-                              href={p.url_origen} 
-                              target="_blank" 
+                        <tr key={p.id_lema} className="hover:bg-marino-700/25 transition-colors">
+                          <td className="px-4 py-3 font-display text-base text-niebla">
+                            {p.lema}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-niebla/70">#{id}</td>
+                          <td className="px-4 py-3 text-xs text-niebla/55 max-w-xs truncate">
+                            <a
+                              href={p.url_origen}
+                              target="_blank"
                               rel="noopener noreferrer"
-                              className="hover:text-acento transition-colors underline decoration-niebla/30 underline-offset-2"
+                              className="inline-flex items-center gap-1 hover:text-acento transition-colors"
                             >
-                              {p.url_origen}
+                              <span className="truncate">{p.url_origen}</span>
+                              <ExternalLink className="w-3 h-3 flex-shrink-0" />
                             </a>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <div className="flex justify-end gap-2">
-                              <button 
+                            <div className="inline-flex items-center gap-2">
+                              <button
                                 onClick={() => handleViewHtml(id)}
                                 disabled={!id || loadingHtmlId !== null}
-                                className="text-xs bg-marino-700 hover:bg-marino-600 text-niebla px-3 py-1.5 rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center min-w-[90px]"
+                                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-marino-600/50 text-niebla/75 hover:text-niebla hover:bg-marino-700/50 transition-colors disabled:opacity-40"
                               >
-                                {loadingHtmlId === id ? "Cargando..." : "Ver HTML"}
+                                <Code className="w-3.5 h-3.5" />
+                                {loadingHtmlId === id ? "Cargando…" : "HTML"}
                               </button>
-                              <button 
+                              <button
                                 onClick={() => handleExtract(id, p.lema)}
                                 disabled={!id || extractingId !== null}
-                                className="text-xs bg-marino-600 hover:bg-acento hover:text-marino-900 text-niebla font-medium px-3 py-1.5 rounded transition-colors disabled:opacity-50 inline-flex items-center justify-center min-w-[100px]"
+                                className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-acento/15 border border-acento/35 text-acento hover:bg-acento hover:text-marino-900 font-medium transition-colors disabled:opacity-40"
                               >
-                                {extractingId === id ? "Extrayendo..." : "Procesar RLC"}
+                                <Play className="w-3.5 h-3.5" />
+                                {extractingId === id ? "Extrayendo…" : "Extraer RLC"}
                               </button>
                             </div>
                           </td>
@@ -495,346 +543,364 @@ export default function IngenieroPage() {
                 </table>
               </div>
             )}
-            
-            {pendientes.length > 0 && (
-              <div className="p-3 border-t border-marino-700 bg-marino-900/50 flex justify-between items-center text-sm mt-auto">
-                <button 
-                  onClick={() => setPageP(p => Math.max(1, p - 1))}
-                  disabled={pageP === 1}
-                  className="px-3 py-1 bg-marino-800 rounded disabled:opacity-50 hover:bg-marino-700 transition-colors"
-                >
-                  Anterior
-                </button>
-                <span className="text-niebla/60 font-medium">Página {pageP}</span>
-                <button 
-                  onClick={() => setPageP(p => p + 1)}
-                  disabled={pendientes.length < 20}
-                  className="px-3 py-1 bg-marino-800 rounded disabled:opacity-50 hover:bg-marino-700 transition-colors"
-                >
-                  Siguiente
-                </button>
-              </div>
-            )}
           </div>
-        )}
 
-        {/* ============================================================== */}
-        {/* EXTRAIDOS TAB */}
-        {/* ============================================================== */}
-        {activeTab === "extraidos" && (
-          <div className="flex flex-col">
-            <div className="p-4 border-b border-marino-700 bg-marino-900/50">
-              <div className="flex justify-between items-center">
-                <div className="flex gap-4 items-center">
-                  <span className="text-sm font-bold text-niebla/80 bg-marino-800 px-3 py-1 rounded border border-marino-600">Total Extraídos: {totalExtraidos}</span>
-                  <button onClick={loadExtraidos} className="text-xs text-niebla/60 hover:text-acento transition-colors">↻ Refrescar</button>
-                </div>
-                <button 
-                  onClick={() => setShowFiltersE(!showFiltersE)} 
-                  className="text-xs bg-marino-700 hover:bg-marino-600 text-niebla px-3 py-1.5 rounded transition-colors"
+          <Pagination page={pageP} totalPages={totalPagesP} onPageChange={setPageP} />
+        </div>
+      )}
+
+      {/* ══════════════════ TAB EXTRAÍDOS ══════════════════ */}
+      {activeTab === "extraidos" && (
+        <div className="space-y-4">
+          <div className="bg-marino-900/60 border border-marino-600/40 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-niebla/60">
+                Mostrando registros capturados en <code className="text-acento">registro_lexico_crudo</code>
+              </span>
+              <button
+                onClick={() => setShowFiltersE((v) => !v)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-marino-600/50 text-xs text-niebla/70 hover:text-niebla hover:bg-marino-700/40 transition-colors"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                {showFiltersE ? "Ocultar filtros" : "Filtros"}
+              </button>
+            </div>
+
+            {showFiltersE && (
+              <div className="mt-4 pt-4 border-t border-marino-600/30 flex flex-wrap items-center gap-2.5 text-sm">
+                <select
+                  value={letraE}
+                  onChange={(e) => setLetraE(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla focus:border-acento focus:outline-none"
                 >
-                  {showFiltersE ? "Ocultar Filtros" : "Mostrar Filtros"}
-                </button>
-              </div>
-              
-              {showFiltersE && (
-                <div className="mt-4 pt-4 border-t border-marino-700/50 flex flex-wrap items-center gap-3 text-sm animate-fade-in">
-                  <select 
-                    value={letraE} 
-                    onChange={e => setLetraE(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none focus:border-acento"
+                  <option value="">Letra: todas</option>
+                  {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  placeholder="ID exacto"
+                  value={idExactoE}
+                  onChange={(e) => setIdExactoE(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-24 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Desde ID"
+                  value={idDesdeE}
+                  onChange={(e) => setIdDesdeE(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-24 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Hasta ID"
+                  value={idHastaE}
+                  onChange={(e) => setIdHastaE(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-24 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Min acep."
+                  value={minAcepciones}
+                  onChange={(e) => setMinAcepciones(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-24 focus:border-acento focus:outline-none"
+                />
+                <input
+                  type="number"
+                  placeholder="Max acep."
+                  value={maxAcepciones}
+                  onChange={(e) => setMaxAcepciones(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla w-24 focus:border-acento focus:outline-none"
+                />
+                <select
+                  value={ordenE}
+                  onChange={(e) => setOrdenE(e.target.value)}
+                  className="bg-marino-800 border border-marino-600/50 rounded-md px-2.5 py-1.5 text-niebla focus:border-acento focus:outline-none"
+                >
+                  <option value="asc">Orden: A → Z</option>
+                  <option value="desc">Orden: Z → A</option>
+                </select>
+                <div className="flex gap-2 ml-auto">
+                  <button
+                    onClick={() => { setPageE(1); loadExtraidos(1); }}
+                    className="px-3.5 py-1.5 rounded-md bg-marino-700 hover:bg-marino-600 text-niebla text-xs font-medium transition-colors"
                   >
-                    <option value="">Cualquier letra</option>
-                    {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(l => (
-                      <option key={l} value={l}>{l}</option>
-                    ))}
-                  </select>
-                  <input 
-                    type="number" 
-                    placeholder="ID Exacto" 
-                    value={idExactoE} 
-                    onChange={e => setIdExactoE(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                  />
-                  <span className="text-niebla/50">o</span>
-                  <input 
-                    type="number" 
-                    placeholder="Desde ID" 
-                    value={idDesdeE} 
-                    onChange={e => setIdDesdeE(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                  />
-                  <input 
-                    type="number" 
-                    placeholder="Hasta ID" 
-                    value={idHastaE} 
-                    onChange={e => setIdHastaE(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                  />
-                  <div className="w-px h-6 bg-marino-600 mx-1"></div>
-                  <input 
-                    type="number" 
-                    placeholder="Min Acepc." 
-                    value={minAcepciones} 
-                    onChange={e => setMinAcepciones(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                  />
-                  <input 
-                    type="number" 
-                    placeholder="Max Acepc." 
-                    value={maxAcepciones} 
-                    onChange={e => setMaxAcepciones(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none w-24 focus:border-acento"
-                  />
-                  <select 
-                    value={ordenE} 
-                    onChange={e => setOrdenE(e.target.value)}
-                    className="bg-marino-800 border border-marino-600 rounded px-2 py-1.5 text-niebla outline-none ml-auto focus:border-acento"
-                  >
-                    <option value="asc">A-Z</option>
-                    <option value="desc">Z-A</option>
-                  </select>
-                  <button onClick={handleApplyFiltersE} className="bg-marino-600 hover:bg-marino-500 px-3 py-1.5 rounded transition-colors">
-                    Filtrar
+                    Aplicar
                   </button>
-                  <button onClick={handleClearFiltersE} className="text-niebla/50 hover:text-niebla px-2">
+                  <button
+                    onClick={handleClearE}
+                    className="px-2.5 py-1.5 text-xs text-niebla/50 hover:text-niebla transition-colors"
+                  >
                     Limpiar
                   </button>
                 </div>
-              )}
-            </div>
-            
-            {loadingExtraidos ? (
-              <div className="p-8 text-center text-niebla/50 flex-1">Cargando extraídos...</div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-marino-900/40 border border-marino-600/30 rounded-lg overflow-hidden">
+            {loadingE ? (
+              <LoadingSpinner text="Cargando RLCs extraídos…" />
             ) : extraidos.length === 0 ? (
-              <div className="p-8 text-center text-niebla/50 flex-1">No hay lemas extraídos con los filtros actuales.</div>
+              <div className="py-16 text-center text-niebla/45 text-sm">
+                No hay registros extraídos con estos filtros.
+              </div>
             ) : (
-              <div className="overflow-x-auto flex-1">
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
-                  <thead className="bg-marino-900 text-niebla/70 text-xs uppercase">
+                  <thead className="bg-marino-900 text-niebla/50 text-[11px] uppercase tracking-wider border-b border-marino-600/30">
                     <tr>
                       <th className="px-4 py-3 font-medium">Lema</th>
-                      <th className="px-4 py-3 font-medium">ID Entrada</th>
-                      <th className="px-4 py-3 font-medium text-center">Acepciones</th>
-                      <th className="px-4 py-3 font-medium text-center">Estado Limpieza</th>
-                      <th className="px-4 py-3 font-medium text-niebla/50">Fecha Extracción</th>
+                      <th className="px-4 py-3 font-medium">ID</th>
+                      <th className="px-4 py-3 font-medium text-center">Acepc.</th>
+                      <th className="px-4 py-3 font-medium text-center">Integridad RLC</th>
+                      <th className="px-4 py-3 font-medium text-center">Estado Pipeline</th>
+                      <th className="px-4 py-3 font-medium">Extracción</th>
                       <th className="px-4 py-3 font-medium text-right">Acciones</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-marino-700/50">
-                    {extraidos.map((e) => (
-                      <tr key={e.id_rlc} className="hover:bg-marino-700/20 transition-colors">
-                        <td className="px-4 py-3 font-medium text-niebla">{e.lema}</td>
-                        <td className="px-4 py-3 text-niebla/70 font-mono">{e.id_entrada}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className="bg-marino-900 text-acento px-2 py-0.5 rounded-full text-xs font-bold border border-marino-600">
-                            {e.num_acepciones}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {e.estado_limpieza === 'limpio' ? (
-                            <span className="bg-green-900/40 text-green-400 text-xs px-2 py-1 rounded font-medium border border-green-900/50">Limpio</span>
-                          ) : (
-                            <span className="bg-yellow-900/40 text-yellow-400 text-xs px-2 py-1 rounded font-medium border border-yellow-900/50">Crudo</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-niebla/50 text-xs">
-                          {e.fecha_extraccion ? new Date(e.fecha_extraccion).toLocaleString() : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <button 
-                            onClick={() => handleViewRlc(e.id_rlc, e.rlc_json)}
-                            className="text-xs bg-marino-700 hover:bg-marino-600 text-niebla px-3 py-1.5 rounded transition-colors inline-flex items-center justify-center min-w-[90px]"
-                          >
-                            Ver RLC
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                  <tbody className="divide-y divide-marino-600/20">
+                    {extraidos.map((e) => {
+                      const procBadge =
+                        ESTADO_PROC_BADGE[e.estado_procesamiento] || ESTADO_PROC_BADGE.pendiente;
+                      return (
+                        <tr key={e.id_rlc} className="hover:bg-marino-700/25 transition-colors">
+                          <td className="px-4 py-3 font-display text-base text-niebla">{e.lema}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-niebla/65">#{e.id_entrada}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-mono bg-marino-900 text-acento border border-marino-600/50">
+                              {e.num_acepciones}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {e.estado_limpieza === "limpio" ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/25">
+                                <CheckCircle2 className="w-3 h-3" /> Editado
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full bg-niebla/5 text-niebla/55 border border-marino-600/40">
+                                Original
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`text-[11px] px-2.5 py-0.5 rounded-full border ${procBadge.cls}`}>
+                              {procBadge.label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-niebla/50">
+                            {e.fecha_extraccion
+                              ? new Date(e.fecha_extraccion).toLocaleDateString("es-PE")
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => openRlcModal(e)}
+                              className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-marino-600/50 text-niebla/80 hover:text-acento hover:border-acento/40 transition-colors"
+                            >
+                              <FileJson className="w-3.5 h-3.5" />
+                              Ver / Editar RLC
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
-            
-            {extraidos.length > 0 && (
-              <div className="p-3 border-t border-marino-700 bg-marino-900/50 flex justify-between items-center text-sm mt-auto">
-                <button 
-                  onClick={() => setPageE(p => Math.max(1, p - 1))}
-                  disabled={pageE === 1}
-                  className="px-3 py-1 bg-marino-800 rounded disabled:opacity-50 hover:bg-marino-700 transition-colors"
-                >
-                  Anterior
-                </button>
-                <span className="text-niebla/60 font-medium">Página {pageE}</span>
-                <button 
-                  onClick={() => setPageE(p => p + 1)}
-                  disabled={extraidos.length < 20}
-                  className="px-3 py-1 bg-marino-800 rounded disabled:opacity-50 hover:bg-marino-700 transition-colors"
-                >
-                  Siguiente
-                </button>
-              </div>
+          </div>
+
+          <Pagination page={pageE} totalPages={totalPagesE} onPageChange={setPageE} />
+        </div>
+      )}
+
+      {/* ══════════════════ CONFIGURACIÓN FUENTE ══════════════════ */}
+      <div className="bg-marino-900/40 border border-marino-600/30 rounded-lg overflow-hidden">
+        <button
+          onClick={() => setShowConfig((v) => !v)}
+          className="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-marino-700/20 transition-colors"
+        >
+          <div className="flex items-center gap-2.5">
+            <Settings className="w-4 h-4 text-acento/80" />
+            <span className="text-sm font-medium text-niebla/85">
+              Configuración de Fuente Oficial (DiPerú)
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span
+              className={`text-[11px] px-2.5 py-0.5 rounded-full border ${
+                configStatus === "Conectado"
+                  ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"
+                  : configStatus === "Fallo"
+                  ? "bg-red-500/10 text-red-300 border-red-500/30"
+                  : "bg-amber-500/10 text-amber-300 border-amber-500/30"
+              }`}
+            >
+              {configStatus}
+            </span>
+            {showConfig ? (
+              <ChevronUp className="w-4 h-4 text-niebla/50" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-niebla/50" />
             )}
           </div>
+        </button>
+
+        {showConfig && (
+          <div className="px-5 py-4 border-t border-marino-600/30 flex flex-col sm:flex-row gap-3 sm:items-end">
+            <div className="flex-1">
+              <label className="block text-[11px] uppercase tracking-wider text-niebla/50 mb-1.5">
+                URL Base del Diccionario de Peruanismos
+              </label>
+              <input
+                type="text"
+                value={urlConfig}
+                onChange={(e) => setUrlConfig(e.target.value)}
+                className="w-full bg-marino-800 border border-marino-600/50 rounded-md px-3 py-2 text-sm text-niebla focus:border-acento focus:outline-none"
+              />
+            </div>
+            <button
+              onClick={handleSaveConfig}
+              disabled={savingConfig}
+              className="px-4 py-2 rounded-md bg-acento/15 border border-acento/40 text-acento hover:bg-acento hover:text-marino-900 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {savingConfig ? "Validando…" : "Guardar y probar"}
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Configuración de Fuente de Datos (Oculta al fondo) */}
-      <div className="bg-marino-800 rounded-lg border border-marino-700 overflow-hidden shadow-md mt-8">
-        <button 
-          onClick={() => setShowConfig(!showConfig)}
-          className="w-full p-4 border-b border-marino-700 bg-marino-900/30 hover:bg-marino-900/70 transition-colors flex justify-between items-center"
-        >
-          <div className="flex items-center gap-3">
-            <span className="text-lg">⚙️</span>
-            <h2 className="font-medium text-niebla/80">Configuración Avanzada de Extracción</h2>
-          </div>
-          <span className="text-niebla/50 text-sm">{showConfig ? "Ocultar ▲" : "Mostrar ▼"}</span>
-        </button>
-        
-        {showConfig && (
-          <div className="p-5 flex flex-wrap items-center gap-5 animate-fade-in bg-marino-900/10">
-            <div className="flex-1 min-w-[300px]">
-              <label className="block text-xs font-medium text-niebla/60 mb-1.5 uppercase tracking-wider">URL / Endpoint del DiPerú</label>
-              <input 
-                type="text" 
-                value={urlConfig}
-                onChange={e => setUrlConfig(e.target.value)}
-                className="w-full bg-marino-900 border border-marino-600 rounded px-3 py-2.5 text-niebla outline-none focus:border-acento transition-colors shadow-inner"
-              />
-              <p className="text-[11px] text-niebla/40 mt-1">
-                Base URL utilizada por el Web Scraper para resolver y recolectar las entradas léxicas.
-              </p>
-            </div>
-            <div className="flex flex-col justify-end pt-5">
-              <button 
-                onClick={handleSaveConfig}
-                disabled={savingConfig}
-                className="bg-marino-600 hover:bg-acento hover:text-marino-900 text-niebla px-5 py-2.5 rounded transition-colors disabled:opacity-50 font-medium h-[46px]"
+      {/* ══════════════════ MODAL HTML ══════════════════ */}
+      <Modal
+        open={htmlModal.open}
+        onClose={() => setHtmlModal({ open: false, id: null, html: "" })}
+        title={`HTML capturado · Entrada #${htmlModal.id || ""}`}
+        subtitle="Fragmento depurado del DOM de DiPerú (div#ListaEntradaIndex)"
+      >
+        <div className="bg-marino-800/80 border border-marino-600/40 rounded-lg p-4 overflow-x-auto">
+          <pre className="font-mono text-xs text-acento-claro whitespace-pre-wrap break-words leading-relaxed">
+            {htmlModal.html}
+          </pre>
+        </div>
+      </Modal>
+
+      {/* ══════════════════ MODAL RLC (VER / LIMPIAR) ══════════════════ */}
+      <Modal
+        open={rlcModal.open}
+        onClose={() => setRlcModal({ open: false, id_rlc: null, lema: "", content: null })}
+        title={`Registro Léxico Crudo · ${rlcModal.lema}`}
+        subtitle={isEditingRlc ? "Modo edición manual (genera registro de auditoría)" : "Vista estructurada JSONB"}
+        headerExtra={
+          !isEditingRlc && (
+            <button
+              onClick={() => setIsEditingRlc(true)}
+              className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-acento/15 border border-acento/40 text-acento hover:bg-acento hover:text-marino-900 font-medium transition-colors"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              Editar y limpiar
+            </button>
+          )
+        }
+        footer={
+          isEditingRlc ? (
+            <>
+              <button
+                onClick={() => {
+                  setIsEditingRlc(false);
+                  setJsonError("");
+                }}
+                className="px-4 py-2 text-sm rounded-md border border-marino-600/50 text-niebla/70 hover:text-niebla"
               >
-                {savingConfig ? "Validando..." : "Guardar y Probar Conexión"}
+                Cancelar
               </button>
+              <button
+                onClick={handleSaveLimpieza}
+                disabled={savingLimpio || !editMotivo.trim()}
+                className="px-4 py-2 text-sm rounded-md bg-acento text-marino-900 font-semibold hover:brightness-110 disabled:opacity-40"
+              >
+                {savingLimpio ? "Guardando…" : "Guardar limpieza"}
+              </button>
+            </>
+          ) : null
+        }
+      >
+        {isEditingRlc ? (
+          <div className="space-y-4">
+            {jsonError && (
+              <div className="flex items-center gap-2 p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{jsonError}</span>
+              </div>
+            )}
+            <div>
+              <label className="block text-xs uppercase tracking-wider text-niebla/55 mb-1.5">
+                JSON del Registro Léxico Crudo
+              </label>
+              <textarea
+                value={editableRlcJson}
+                onChange={(e) => setEditableRlcJson(e.target.value)}
+                rows={14}
+                className="w-full bg-marino-800 border border-marino-600/50 rounded-lg p-3.5 font-mono text-xs text-acento-claro focus:border-acento focus:outline-none"
+              />
             </div>
-            <div className="flex flex-col justify-end pt-5 pl-5 border-l border-marino-700 h-[46px]">
-              <span className="text-xs font-medium text-niebla/60 mb-1 block uppercase tracking-wider">Estado Conexión</span>
-              <span className={`px-2.5 py-1 rounded text-xs font-bold border inline-block ${
-                configStatus === 'Conectado' ? 'bg-green-900/20 text-green-400 border-green-900/50' :
-                configStatus === 'Fallo' ? 'bg-red-900/20 text-red-400 border-red-900/50' :
-                'bg-yellow-900/20 text-yellow-400 border-yellow-900/50'
-              }`}>
-                {configStatus}
+            <div>
+              <label className="block text-xs uppercase tracking-wider text-acento mb-1.5">
+                Motivo de la corrección (obligatorio para auditoría)
+              </label>
+              <input
+                type="text"
+                value={editMotivo}
+                onChange={(e) => setEditMotivo(e.target.value)}
+                placeholder="Ej: Corrección de categoría mal parseada o remisión rota..."
+                className="w-full bg-marino-800 border border-marino-600/50 rounded-md px-3 py-2 text-sm text-niebla focus:border-acento focus:outline-none"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="bg-marino-800/80 border border-marino-600/40 rounded-lg p-4 overflow-x-auto">
+            <pre className="font-mono text-xs text-acento-claro whitespace-pre-wrap leading-relaxed">
+              {JSON.stringify(rlcModal.content, null, 2)}
+            </pre>
+          </div>
+        )}
+      </Modal>
+
+      {/* ══════════════════ TARJETA FLOTANTE DE LOTE ══════════════════ */}
+      {masivaProgress && masivaProgress.estado === "Procesando" && (
+        <div className="fixed bottom-5 right-5 z-40 w-[calc(100vw-2.5rem)] max-w-sm">
+          <div className="bg-marino-900 border border-acento/40 rounded-xl shadow-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 text-acento animate-spin" />
+                <h3 className="font-display text-sm text-acento">Extracción en curso</h3>
+              </div>
+              <span className="text-xs font-mono text-niebla/75">
+                {masivaProgress.actual}/{masivaProgress.total}
               </span>
             </div>
-          </div>
-        )}
-      </div>
-
-      {/* HTML Visor Modal */}
-      {htmlModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#1e1e1e] border border-marino-600 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-marino-700 bg-marino-900/80">
-              <h3 className="text-acento font-serif text-lg">Visor HTML (DiPerú)</h3>
-              <button onClick={() => setHtmlModalOpen(false)} className="text-niebla/50 hover:text-red-400 transition-colors">✕ Cerrar</button>
+            <div className="w-full h-2 bg-marino-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-acento transition-all duration-300"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (masivaProgress.actual / Math.max(1, masivaProgress.total)) * 100
+                  )}%`,
+                }}
+              />
             </div>
-            <div className="flex-1 overflow-auto p-6 text-niebla">
-              <div className="bg-[#121212] p-4 rounded border border-marino-700 shadow-inner overflow-x-auto">
-                <pre className="font-mono text-sm text-acento-claro whitespace-pre-wrap break-words">
-                  {htmlContent}
-                </pre>
-              </div>
+            <div className="flex items-center justify-between text-[11px] text-niebla/60">
+              <span>Exitosos: <strong className="text-emerald-400">{masivaProgress.exitosos ?? 0}</strong></span>
+              <span>Fallidos: <strong className="text-red-400">{masivaProgress.fallidos ?? 0}</strong></span>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* RLC Visor / Editor Modal */}
-      {rlcModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#1e1e1e] border border-marino-600 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-marino-700 bg-marino-900/80">
-              <h3 className="text-acento font-serif text-lg">Visor RLC (Registro Léxico Crudo)</h3>
-              <div className="flex gap-4">
-                {!isEditingRlc && (
-                  <button 
-                    onClick={() => setIsEditingRlc(true)} 
-                    className="text-xs bg-marino-600 text-niebla px-3 py-1 rounded hover:bg-acento hover:text-marino-900 transition-colors"
-                  >
-                    Editar y Limpiar RLC
-                  </button>
-                )}
-                <button onClick={() => setRlcModalOpen(false)} className="text-niebla/50 hover:text-red-400 transition-colors">✕ Cerrar</button>
-              </div>
-            </div>
-            
-            <div className="flex-1 overflow-auto p-6 text-niebla flex flex-col gap-4">
-              {isEditingRlc ? (
-                <>
-                  <div className="flex flex-col gap-2 flex-1">
-                    <label className="text-sm text-niebla/80">Editor JSON (asegúrese de mantener el formato válido)</label>
-                    <textarea 
-                      value={editableRlcJson}
-                      onChange={e => setEditableRlcJson(e.target.value)}
-                      className="w-full flex-1 min-h-[300px] bg-[#121212] text-acento-claro font-mono text-sm p-4 rounded border border-marino-700 outline-none focus:border-acento"
-                    />
-                  </div>
-                  <div className="bg-marino-800 p-4 rounded border border-marino-700 mt-2">
-                    <label className="block text-sm text-acento font-bold mb-2">Motivo de la Edición (Obligatorio)</label>
-                    <input 
-                      type="text" 
-                      value={editMotivo}
-                      onChange={e => setEditMotivo(e.target.value)}
-                      placeholder="Describa por qué se limpió manualmente este registro..."
-                      className="w-full bg-marino-900 border border-marino-600 rounded px-3 py-2 text-niebla outline-none focus:border-acento"
-                    />
-                  </div>
-                  <div className="flex justify-end gap-3 mt-2">
-                    <button 
-                      onClick={() => setIsEditingRlc(false)}
-                      className="px-4 py-2 bg-marino-700 rounded text-niebla hover:bg-marino-600"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      onClick={handleSaveLimpieza}
-                      disabled={savingLimpio || !editMotivo.trim()}
-                      className="px-4 py-2 bg-acento text-marino-900 font-bold rounded disabled:opacity-50 hover:bg-acento-claro"
-                    >
-                      {savingLimpio ? "Guardando..." : "Guardar Limpieza"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="bg-[#121212] p-4 rounded border border-marino-700 shadow-inner overflow-x-auto flex-1">
-                  <pre className="font-mono text-sm text-acento-claro whitespace-pre-wrap">
-                    {JSON.stringify(rlcContent, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
+            <p className="text-xs font-mono text-acento-claro/85 truncate">
+              {masivaProgress.mensaje}
+            </p>
           </div>
         </div>
       )}
-
-      {/* Progress Floating Card */}
-      {masivaProgress && masivaProgress.estado === "Procesando" && (
-        <div className="fixed bottom-6 right-6 z-[90] w-full max-w-sm animate-fade-in-up">
-          <div className="bg-marino-800 border-l-4 border-acento rounded-lg shadow-2xl p-5 flex flex-col gap-3">
-            <h3 className="font-serif text-acento text-lg">Extracción Masiva</h3>
-            <p className="text-niebla/80 text-sm">Procesando {masivaProgress.actual} de {masivaProgress.total} IDs</p>
-            <div className="w-full bg-marino-900 rounded-full h-2.5 border border-marino-700 overflow-hidden">
-              <div 
-                className="bg-acento h-full transition-all duration-300 relative overflow-hidden"
-                style={{ width: `${(masivaProgress.actual / Math.max(1, masivaProgress.total)) * 100}%` }}
-              >
-                <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
-              </div>
-            </div>
-            <p className="text-xs font-mono text-acento-claro truncate">{masivaProgress.mensaje}</p>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

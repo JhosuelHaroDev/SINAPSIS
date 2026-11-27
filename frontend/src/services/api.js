@@ -1,17 +1,21 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-/**
- * Ejecuta una petición HTTP al backend configurado.
- * Añade parámetros de búsqueda automáticamente a la URL y maneja errores genéricos.
- * 
- * @param {string} path - Ruta de la API (ej. "/api/stats").
- * @param {Object} [params={}] - Parámetros de consulta (Query params).
- * @returns {Promise<any>} Respuesta parseada de JSON.
- * @throws {Error} Si la respuesta HTTP no es ok (200-299).
- */
+async function parseError(res, fallback) {
+  try {
+    const data = await res.json();
+    if (typeof data.detail === "string") return data.detail;
+    if (Array.isArray(data.detail)) {
+      return data.detail.map((e) => e.msg || JSON.stringify(e)).join("; ");
+    }
+  } catch {
+    const txt = await res.text().catch(() => "");
+    if (txt) return txt;
+  }
+  return fallback || `Error HTTP ${res.status}`;
+}
+
 async function fetchJSON(path, params = {}) {
   const url = new URL(path, API_URL);
-
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, value);
@@ -19,15 +23,25 @@ async function fetchJSON(path, params = {}) {
   });
 
   const res = await fetch(url.toString());
-
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    throw new Error(await parseError(res, `API ${res.status}: ${res.statusText}`));
   }
-
   return res.json();
 }
 
+async function sendJSON(path, method, body) {
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+// ── Generales / Explorador / Pipeline ────────────────────────────────────────
 export function fetchStats() {
   return fetchJSON("/api/stats");
 }
@@ -52,85 +66,95 @@ export function fetchPipelineStatus() {
   return fetchJSON("/api/pipeline/status");
 }
 
-export function fetchIncidencias({
-  fase,
-  tipo,
-  revision,
-  page = 1,
-  size = 20,
-} = {}) {
+export function fetchIncidencias({ fase, tipo, revision, page = 1, size = 20 } = {}) {
   return fetchJSON("/api/incidencias", { fase, tipo, revision, page, size });
 }
 
-// Ingeniero
+export function fetchAuditoria({ origen, fase, q, revision, page = 1, size = 20 } = {}) {
+  return fetchJSON("/api/auditoria", { origen, fase, q, revision, page, size });
+}
+
+export function getAuditoriaExportUrl({ origen, fase, q, revision } = {}) {
+  const url = new URL("/api/auditoria/exportar", API_URL);
+  Object.entries({ origen, fase, q, revision }).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+  });
+  return url.toString();
+}
+
+// ── Métricas Pre-Test vs. Post-Test (Fase 5) ─────────────────────────────────
+export function fetchMetricasPostTest() {
+  return fetchJSON("/api/metricas/post-test");
+}
+
+export function getExportCpwUrl() {
+  return new URL("/api/metricas/exportar/cpw", API_URL).toString();
+}
+
+export function getExportPrsUrl() {
+  return new URL("/api/metricas/exportar/prs", API_URL).toString();
+}
+
+export function getExportReporteUrl() {
+  return new URL("/api/metricas/exportar/reporte", API_URL).toString();
+}
+
+// ── Ingeniero de Datos ───────────────────────────────────────────────────────
+export function fetchIngenieroConfig() {
+  return fetchJSON("/api/ingeniero/config");
+}
+
+export function updateIngenieroConfig(url_origen) {
+  return sendJSON("/api/ingeniero/config", "PUT", { url_origen });
+}
+
 export function fetchIngenieroPendientes(params = {}) {
   const { page = 1, size = 20, letra, id_exacto, id_desde, id_hasta, orden } = params;
-  return fetchJSON("/api/ingeniero/pendientes", { page, size, letra, id_exacto, id_desde, id_hasta, orden });
+  return fetchJSON("/api/ingeniero/pendientes", {
+    page, size, letra, id_exacto, id_desde, id_hasta, orden,
+  });
 }
 
 export function fetchIngenieroExtraidos(params = {}) {
-  const { page = 1, size = 20, letra, id_exacto, id_desde, id_hasta, acepciones_min, acepciones_max, orden } = params;
-  return fetchJSON("/api/ingeniero/extraidos", { page, size, letra, id_exacto, id_desde, id_hasta, acepciones_min, acepciones_max, orden });
-}
-
-/**
- * Llama al backend para procesar en vivo una entrada de DiPerú (Ingeniero).
- * 
- * @param {number} id_entrada - ID interno en DiPerú.
- * @param {string} lema - Lema a extraer.
- * @returns {Promise<Object>}
- */
-export async function extraerDiPeru(id_entrada, lema) {
-  const res = await fetch(`${API_URL}/api/ingeniero/extraer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id_entrada, lema }),
+  const {
+    page = 1, size = 20, letra, id_exacto, id_desde, id_hasta,
+    acepciones_min, acepciones_max, orden,
+  } = params;
+  return fetchJSON("/api/ingeniero/extraidos", {
+    page, size, letra, id_exacto, id_desde, id_hasta,
+    acepciones_min, acepciones_max, orden,
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
 }
 
-export async function fetchHtmlCrudo(id_entrada) {
-  const res = await fetch(`${API_URL}/api/ingeniero/html/${id_entrada}`);
-  if (!res.ok) throw new Error("Fallo al obtener HTML");
-  return res.json();
+export function extraerDiPeru(id_entrada, lema) {
+  return sendJSON("/api/ingeniero/extraer", "POST", { id_entrada, lema });
 }
 
-export async function iniciarExtraccionMasiva(rangos) {
-  const res = await fetch(`${API_URL}/api/ingeniero/extraccion-masiva`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rangos }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Error al iniciar extracción masiva");
-  }
-  return res.json();
+export function fetchHtmlCrudo(id_entrada) {
+  return fetchJSON(`/api/ingeniero/html/${id_entrada}`);
 }
 
-export async function fetchProgresoExtraccion() {
-  const res = await fetch(`${API_URL}/api/ingeniero/progreso-extraccion`);
-  return res.json();
+export function iniciarExtraccionMasiva(rangos) {
+  return sendJSON("/api/ingeniero/extraccion-masiva", "POST", { rangos });
 }
 
-export async function limpiarRlc(id_rlc, rlc_json, motivo) {
-  const res = await fetch(`${API_URL}/api/ingeniero/rlc/${id_rlc}/limpiar`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rlc_json, motivo }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Error al limpiar RLC");
-  }
-  return res.json();
+export function fetchProgresoExtraccion() {
+  return fetchJSON("/api/ingeniero/progreso-extraccion");
 }
 
-// Analista
+export function limpiarRlc(id_rlc, rlc_json, motivo) {
+  return sendJSON(`/api/ingeniero/rlc/${id_rlc}/limpiar`, "PATCH", { rlc_json, motivo });
+}
+
+// ── Analista Semántico ───────────────────────────────────────────────────────
 export function fetchAnalistaPendientes(params = {}) {
-  const { page = 1, size = 20, lema, acepciones, fecha_desde, fecha_hasta } = params;
-  return fetchJSON("/api/analista/pendientes", { page, size, lema, acepciones, fecha_desde, fecha_hasta });
+  const {
+    page = 1, size = 20, lema, acepciones,
+    estado_procesamiento = "pendiente", fecha_desde, fecha_hasta,
+  } = params;
+  return fetchJSON("/api/analista/pendientes", {
+    page, size, lema, acepciones, estado_procesamiento, fecha_desde, fecha_hasta,
+  });
 }
 
 export function fetchAnalistaProcesados(params = {}) {
@@ -138,68 +162,68 @@ export function fetchAnalistaProcesados(params = {}) {
   return fetchJSON("/api/analista/procesados", { page, size, lema, pos_mcr, tipo_peruanismo });
 }
 
-export async function procesarPipeline(id_rlc) {
-  const res = await fetch(`${API_URL}/api/analista/procesar/${id_rlc}`, {
-    method: 'POST'
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+export function procesarPipeline(id_rlc) {
+  return sendJSON(`/api/analista/procesar/${id_rlc}`, "POST");
 }
 
-export async function descartarMasivo(ids_uce) {
-  const res = await fetch(`${API_URL}/api/analista/descartar-masivo`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids_uce }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Error al descartar");
+export function procesarLoteAnalista({ ids_rlc, limite = 25 } = {}) {
+  const payload = ids_rlc && ids_rlc.length > 0 ? { ids_rlc } : { limite };
+  return sendJSON("/api/analista/procesar-lote", "POST", payload);
+}
+
+export function resolverRemisionesPendientes() {
+  return sendJSON("/api/analista/resolver-remisiones", "POST");
+}
+
+export function engancharPendientes({ limite = 50, forzar = false } = {}) {
+  return sendJSON("/api/analista/enganchar-pendientes", "POST", { limite, forzar });
+}
+
+export function fetchProgresoProcesamiento() {
+  return fetchJSON("/api/analista/progreso-procesamiento");
+}
+
+export function descartarMasivo(ids_uce) {
+  return sendJSON("/api/analista/descartar-masivo", "POST", { ids_uce });
+}
+
+// ── Lexicógrafo ──────────────────────────────────────────────────────────────
+export function fetchLexicografoPropuestas(arg1, estado = "pendiente", page = 1, size = 20) {
+  if (arg1 && typeof arg1 === "object") {
+    const {
+      tipo,
+      estado: est = "pendiente",
+      q,
+      incluir_ya_presente,
+      page: p = 1,
+      size: s = 20,
+    } = arg1;
+    return fetchJSON("/api/lexicografo/propuestas", {
+      tipo, estado: est, q, incluir_ya_presente, page: p, size: s,
+    });
   }
-  return res.json();
-}
-
-// Lexicógrafo
-export function fetchLexicografoPropuestas(tipo, estado = "pendiente", page = 1, size = 20) {
-  return fetchJSON("/api/lexicografo/propuestas", { tipo, estado, page, size });
+  return fetchJSON("/api/lexicografo/propuestas", { tipo: arg1, estado, page, size });
 }
 
 export function fetchPropuestaDetalle(id_uce) {
   return fetchJSON(`/api/lexicografo/propuesta/${id_uce}`);
 }
 
-export function buscarSynsetsMCR(query) {
-  return fetchJSON(`/api/lexicografo/buscar-synsets?q=${encodeURIComponent(query)}`);
+export function buscarSynsetsMCR(q, pos) {
+  return fetchJSON("/api/lexicografo/buscar-synsets", { q, pos });
 }
 
-/**
- * Guarda la decisión curatorial del Lexicógrafo (Aceptar/Rechazar) y dispara la auditoría.
- * 
- * @param {string} id_uce - UUID de la propuesta a revisar.
- * @param {string} decision - 'aceptar', 'rechazar' u 'observar'.
- * @param {string} [notas=""] - Justificación o notas adicionales.
- * @param {string} [nuevo_offset=null] - En caso de cambio manual de offset MCR.
- * @returns {Promise<Object>}
- */
-export async function revisarPropuesta(id_uce, decision, notas = "", nuevo_offset = null) {
-  const res = await fetch(`${API_URL}/api/lexicografo/revisar/${id_uce}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, notas, nuevo_offset }),
+export function revisarPropuesta(
+  id_uce,
+  decision,
+  notas = "",
+  nuevo_offset = null,
+  tipo_relacion = null
+) {
+  return sendJSON(`/api/lexicografo/revisar/${id_uce}`, "POST", {
+    decision,
+    notas,
+    nuevo_offset,
+    tipo_relacion,
   });
-  if (!res.ok) {
-    let msg = "Error al revisar la propuesta";
-    try {
-      const data = await res.json();
-      // data.detail puede ser string (error 400/500) o array de objetos (error 422 de Pydantic)
-      if (typeof data.detail === 'string') {
-        msg = data.detail;
-      } else if (Array.isArray(data.detail)) {
-        msg = data.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
-      }
-    } catch (e) {}
-    throw new Error(msg);
-  }
-  return res.json();
 }
-

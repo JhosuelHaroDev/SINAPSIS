@@ -2,8 +2,9 @@
 
 import { useRole } from "@/context/RoleContext";
 import { useApi } from "@/hooks/useApi";
-import { fetchStats, fetchEmbudo, fetchPipelineStatus } from "@/services/api";
+import { fetchStats, fetchEmbudo, fetchPipelineStatus, fetchMetricasPostTest } from "@/services/api";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { PostTestPanel } from "@/components/metricas/PostTestPanel";
 
 /**
  * Dashboard principal — Vista adaptada al rol activo.
@@ -71,8 +72,9 @@ function Section({ title, children }) {
 function DashboardAdmin() {
   const { data: embudo, loading: l1 } = useApi(fetchEmbudo, []);
   const { data: pipeline, loading: l2 } = useApi(fetchPipelineStatus, []);
+  const { data: metricas, loading: l3 } = useApi(fetchMetricasPostTest, []);
 
-  if (l1 || l2) return <LoadingSpinner text="Cargando métricas del sistema…" />;
+  if (l1 || l2 || l3) return <LoadingSpinner text="Cargando métricas del sistema…" />;
 
   const e = embudo || {};
   const p = pipeline || {};
@@ -93,6 +95,11 @@ function DashboardAdmin() {
         <StatCard label="RLC extraídos" value={e.rlc_extraidos} sub="Socialización" />
         <StatCard label="UCE integrables" value={e.uce_integrables} sub="Externalización" accent />
         <StatCard label="Synsets MCR" value={e.referencia_mcr?.total_synsets} sub="Espacio de referencia" />
+      </div>
+
+      {/* Comparativa Pre-Test vs Post-Test */}
+      <div className="mb-8">
+        <PostTestPanel metricas={metricas} />
       </div>
 
       {/* Clasificación + Pipeline */}
